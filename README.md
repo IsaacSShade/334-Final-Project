@@ -28,7 +28,7 @@
   <h3 align="center">334 Final Project</h3>
   <h1 align="center">Generative Agents Simulation</h1>
   <p align="center">
-    By Aiden, Rohan, and Carson
+    By Aiden Tabrah, Rohan Kanumuri, and Carson Frost
   </p>
 
   <p align="center">
