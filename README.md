@@ -136,6 +136,8 @@ Eventually this will all become part of a Makefile
 
 ## Roadmap
 
+We used a github Project as our project management tool, view it here: https://github.com/users/IsaacSShade/projects/2
+
 - [ ] Create a character creation screen
 - [ ] Create an environment for AIs to interact with
 - [ ] Provide an interface for AIs to interact with the environment
