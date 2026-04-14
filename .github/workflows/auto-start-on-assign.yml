@@ -302,6 +302,7 @@ jobs:
                 defaultBranchName,
                 defaultBranchOid,
                 branchName,
+                assigneeLogin: currentAssignees[0].login,
               })
             );
 
@@ -426,6 +427,18 @@ jobs:
 
             if (existing.data.length > 0) {
               core.info(`PR already exists for ${branchName}.`);
+
+              // Keep PR assignee in sync even if the PR already exists.
+              if (issue.assigneeLogin) {
+                await github.rest.issues.addAssignees({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: existing.data[0].number,
+                  assignees: [issue.assigneeLogin],
+                });
+                core.info(`Assigned existing PR #${existing.data[0].number} to ${issue.assigneeLogin}.`);
+              }
+
               return;
             }
 
@@ -483,6 +496,15 @@ jobs:
                 body: prBody,
               }
             );
+
+            if (issue.assigneeLogin) {
+              await github.rest.issues.addAssignees({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: created.createPullRequest.pullRequest.number,
+                assignees: [issue.assigneeLogin],
+              });
+            }
 
             core.info(
               `Created draft PR #${created.createPullRequest.pullRequest.number}: ${created.createPullRequest.pullRequest.url}`
