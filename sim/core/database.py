@@ -1,0 +1,384 @@
+from pathlib import Path
+import sqlite3
+import uuid
+from typing import Optional
+
+
+class Database:
+	"""
+	Purpose:
+		Manage SQLite persistence for simulation data.
+	"""
+
+	def __init__(self, db_path: Optional[str] = None) -> None:
+		"""
+		Purpose:
+			Create the database manager and open a SQLite connection.
+
+		Inputs:
+			db_path: Optional override path to the SQLite database file.
+
+		Outputs:
+			None.
+		"""
+
+		if db_path is None:
+			project_sim_dir = Path(__file__).resolve().parent.parent
+			self.db_path = project_sim_dir / "data" / "sim.db"
+		else:
+			self.db_path = Path(db_path)
+
+		self.connection = self._connect()
+
+	def _connect(self) -> sqlite3.Connection:
+		"""
+		Purpose:
+			Open a SQLite connection and enable foreign key support.
+
+		Inputs:
+			None.
+
+		Outputs:
+			A live sqlite3 connection.
+		"""
+		self.db_path.parent.mkdir(parents=True, exist_ok=True)
+
+		connection = sqlite3.connect(self.db_path)
+		connection.row_factory = sqlite3.Row
+		connection.execute("PRAGMA foreign_keys = ON;")
+		return connection
+
+	def initialize(self) -> None:
+		"""
+		Purpose:
+			Create the required database tables if they do not already exist.
+
+		Inputs:
+			None.
+
+		Outputs:
+			None.
+		"""
+		schema = """
+		CREATE TABLE IF NOT EXISTS rooms (
+			id TEXT PRIMARY KEY,
+			size INTEGER NOT NULL CHECK (size >= 0),
+			description TEXT NOT NULL
+		);
+
+		CREATE TABLE IF NOT EXISTS characters (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			background TEXT NOT NULL,
+			personality TEXT NOT NULL,
+			current_room_id TEXT,
+			FOREIGN KEY (current_room_id) REFERENCES rooms(id) ON DELETE SET NULL
+		);
+
+		CREATE TABLE IF NOT EXISTS events (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			turn_number INTEGER NOT NULL,
+			character_id TEXT NOT NULL,
+			room_id TEXT,
+			log TEXT NOT NULL,
+			created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (character_id) REFERENCES characters(id),
+			FOREIGN KEY (room_id) REFERENCES rooms(id) ON DELETE SET NULL
+		);
+
+		CREATE TABLE IF NOT EXISTS memories (
+			id TEXT PRIMARY KEY,
+			character_id TEXT NOT NULL,
+			memory_type TEXT NOT NULL CHECK (memory_type IN ('short_term', 'long_term')),
+			text TEXT NOT NULL,
+			source_event_id INTEGER,
+			created_turn INTEGER,
+			created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (character_id) REFERENCES characters(id) ON DELETE CASCADE,
+			FOREIGN KEY (source_event_id) REFERENCES events(id) ON DELETE SET NULL
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_events_turn_number
+		ON events(turn_number);
+
+		CREATE INDEX IF NOT EXISTS idx_memories_character_id
+		ON memories(character_id);
+
+		CREATE INDEX IF NOT EXISTS idx_memories_character_type
+		ON memories(character_id, memory_type);
+		"""
+		self.connection.executescript(schema)
+		self.connection.commit()
+
+	def close(self) -> None:
+		"""
+		Purpose:
+			Close the database connection cleanly.
+
+		Inputs:
+			None.
+
+		Outputs:
+			None.
+		"""
+		self.connection.close()
+
+	def create_room(
+		self,
+		size: int,
+		description: str,
+		room_id: Optional[str] = None,
+	) -> str:
+		"""
+		Purpose:
+			Insert a new room into the database.
+
+		Inputs:
+			size: Non-negative room size value.
+			description: Human-readable room description.
+			room_id: Optional custom room identifier.
+
+		Outputs:
+			The room identifier that was inserted.
+		"""
+		if room_id is None:
+			room_id = str(uuid.uuid4())
+
+		self.connection.execute(
+			"""
+			INSERT INTO rooms (id, size, description)
+			VALUES (?, ?, ?)
+			""",
+			(room_id, size, description),
+		)
+		self.connection.commit()
+		return room_id
+
+	def update_room_description(self, room_id: str, description: str) -> None:
+		"""
+		Purpose:
+			Update the current description of a room.
+
+		Inputs:
+			room_id: The room to update.
+			description: The new room description.
+
+		Outputs:
+			None.
+		"""
+		self.connection.execute(
+			"""
+			UPDATE rooms
+			SET description = ?
+			WHERE id = ?
+			""",
+			(description, room_id),
+		)
+		self.connection.commit()
+
+	def create_character(
+		self,
+		name: str,
+		background: str,
+		personality: str,
+		current_room_id: Optional[str] = None,
+		character_id: Optional[str] = None,
+	) -> str:
+		"""
+		Purpose:
+			Insert a new character into the database.
+
+		Inputs:
+			name: Character name.
+			background: Character backstory/background text.
+			personality: Character personality text.
+			current_room_id: Optional room the character currently occupies.
+			character_id: Optional custom character identifier.
+
+		Outputs:
+			The character identifier that was inserted.
+		"""
+		if character_id is None:
+			character_id = str(uuid.uuid4())
+
+		self.connection.execute(
+			"""
+			INSERT INTO characters (id, name, background, personality, current_room_id)
+			VALUES (?, ?, ?, ?, ?)
+			""",
+			(character_id, name, background, personality, current_room_id),
+		)
+		self.connection.commit()
+		return character_id
+
+	def move_character(self, character_id: str, room_id: Optional[str]) -> None:
+		"""
+		Purpose:
+			Update a character's current room assignment.
+
+		Inputs:
+			character_id: The character to move.
+			room_id: The room to move them into, or None.
+
+		Outputs:
+			None.
+		"""
+		self.connection.execute(
+			"""
+			UPDATE characters
+			SET current_room_id = ?
+			WHERE id = ?
+			""",
+			(room_id, character_id),
+		)
+		self.connection.commit()
+
+	def create_event(
+		self,
+		turn_number: int,
+		character_id: str,
+		log: str,
+		room_id: Optional[str] = None,
+	) -> int:
+		"""
+		Purpose:
+			Insert a summarized event log entry for a character turn.
+
+		Inputs:
+			turn_number: The simulation turn number.
+			character_id: The acting character.
+			log: Short natural-language event summary.
+			room_id: Optional room tied to the event.
+
+		Outputs:
+			The integer event identifier that was inserted.
+		"""
+		cursor = self.connection.execute(
+			"""
+			INSERT INTO events (turn_number, character_id, room_id, log)
+			VALUES (?, ?, ?, ?)
+			""",
+			(turn_number, character_id, room_id, log),
+		)
+		event_id = cursor.lastrowid
+
+		if event_id is None:
+			self.connection.rollback()
+			raise RuntimeError("Failed to retrieve event ID after insert.")
+
+		self.connection.commit()
+		return event_id
+
+	def create_memory(
+		self,
+		character_id: str,
+		memory_type: str,
+		text: str,
+		source_event_id: Optional[int] = None,
+		created_turn: Optional[int] = None,
+		memory_id: Optional[str] = None,
+	) -> str:
+		"""
+		Purpose:
+			Insert a character memory record.
+
+		Inputs:
+			character_id: The character who owns the memory.
+			memory_type: Either 'short_term' or 'long_term'.
+			text: The memory text.
+			source_event_id: Optional related event identifier.
+			created_turn: Optional turn when the memory was formed.
+			memory_id: Optional custom memory identifier.
+
+		Outputs:
+			The memory identifier that was inserted.
+		"""
+		if memory_type not in {"short_term", "long_term"}:
+			raise ValueError("memory_type must be 'short_term' or 'long_term'.")
+
+		if memory_id is None:
+			memory_id = str(uuid.uuid4())
+
+		self.connection.execute(
+			"""
+			INSERT INTO memories (
+				id,
+				character_id,
+				memory_type,
+				text,
+				source_event_id,
+				created_turn
+			)
+			VALUES (?, ?, ?, ?, ?, ?)
+			""",
+			(
+				memory_id,
+				character_id,
+				memory_type,
+				text,
+				source_event_id,
+				created_turn,
+			),
+		)
+		self.connection.commit()
+		return memory_id
+
+	def get_character_memories(
+		self,
+		character_id: str,
+		memory_type: Optional[str] = None,
+		limit: Optional[int] = None,
+	) -> list[sqlite3.Row]:
+		"""
+		Purpose:
+			Fetch memory rows for a given character.
+
+		Inputs:
+			character_id: The character whose memories should be returned.
+			memory_type: Optional filter for 'short_term' or 'long_term'.
+			limit: Optional maximum number of rows to return.
+
+		Outputs:
+			A list of sqlite3.Row objects.
+		"""
+		query = """
+		SELECT *
+		FROM memories
+		WHERE character_id = ?
+		"""
+		parameters: list[object] = [character_id]
+
+		if memory_type is not None:
+			query += " AND memory_type = ?"
+			parameters.append(memory_type)
+
+		query += " ORDER BY created_turn DESC, created_at DESC"
+
+		if limit is not None:
+			query += " LIMIT ?"
+			parameters.append(limit)
+
+		cursor = self.connection.execute(query, parameters)
+		return list(cursor.fetchall())
+
+	def get_recent_events(self, limit: int = 20) -> list[sqlite3.Row]:
+		"""
+		Purpose:
+			Fetch the most recent event summaries.
+
+		Inputs:
+			limit: Maximum number of events to return.
+
+		Outputs:
+			A list of sqlite3.Row objects.
+		"""
+		cursor = self.connection.execute(
+			"""
+			SELECT *
+			FROM events
+			ORDER BY turn_number DESC, id DESC
+			LIMIT ?
+			""",
+			(limit,),
+		)
+		return list(cursor.fetchall())
