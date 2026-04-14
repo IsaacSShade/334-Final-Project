@@ -1,0 +1,489 @@
+name: Start issue on assignment
+
+on:
+  issues:
+    types: [assigned]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+
+concurrency:
+  group: auto-start-on-assign-${{ github.event.issue.number || github.run_id }}
+  cancel-in-progress: false
+
+env:
+  PROJECT_OWNER: IsaacSShade
+  PROJECT_NUMBER: ${{ vars.PROJECT_NUMBER }}
+
+jobs:
+  start_issue:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Validate issue + project state
+        id: prepare
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.PROJECT_PAT }}
+          script: |
+            const owner = process.env.PROJECT_OWNER;
+            const projectNumber = Number(process.env.PROJECT_NUMBER);
+            const issueNumber = context.payload.issue?.number;
+            const targetRepo = `${context.repo.owner}/${context.repo.repo}`;
+            const payloadIssue = context.payload.issue;
+
+            if (!projectNumber) {
+              throw new Error("Missing repository variable PROJECT_NUMBER.");
+            }
+
+            if (!payloadIssue) {
+              core.setOutput("skip", "true");
+              core.setOutput("reason", "No issue payload found.");
+              return;
+            }
+
+            const currentAssignees = payloadIssue.assignees || [];
+            if (currentAssignees.length !== 1) {
+              core.info(
+                `Skipping issue #${issueNumber}: expected exactly 1 assignee, found ${currentAssignees.length}.`
+              );
+              core.setOutput("skip", "true");
+              core.setOutput("reason", "Issue does not have exactly one assignee.");
+              return;
+            }
+
+            function slugify(title) {
+              return (title || "untitled")
+                .toLowerCase()
+                .trim()
+                .replace(/['"]/g, "")
+                .replace(/[^a-z0-9]+/g, "-")
+                .replace(/^-+|-+$/g, "")
+                .replace(/-+/g, "-")
+                .slice(0, 80) || "untitled";
+            }
+
+            function choosePrefix(labelNames) {
+              const matches = (labelNames || [])
+                .map((name) => name.toLowerCase())
+                .filter((name) => ["feature", "bug", "enhancement"].includes(name));
+
+              if (matches.length === 1) return matches[0];
+              return "feature";
+            }
+
+            const query = `
+              query($owner: String!, $number: Int!, $after: String) {
+                user(login: $owner) {
+                  projectV2(number: $number) {
+                    id
+                    title
+                    fields(first: 50) {
+                      nodes {
+                        ... on ProjectV2FieldCommon {
+                          id
+                          name
+                        }
+                        ... on ProjectV2SingleSelectField {
+                          id
+                          name
+                          options {
+                            id
+                            name
+                          }
+                        }
+                      }
+                    }
+                    items(first: 100, after: $after) {
+                      pageInfo {
+                        hasNextPage
+                        endCursor
+                      }
+                      nodes {
+                        id
+                        fieldValues(first: 20) {
+                          nodes {
+                            ... on ProjectV2ItemFieldSingleSelectValue {
+                              name
+                              field {
+                                ... on ProjectV2FieldCommon {
+                                  id
+                                  name
+                                }
+                              }
+                            }
+                          }
+                        }
+                        content {
+                          __typename
+                          ... on Issue {
+                            id
+                            number
+                            title
+                            body
+                            linkedBranches(first: 1) {
+                              totalCount
+                            }
+                            repository {
+                              id
+                              nameWithOwner
+                              defaultBranchRef {
+                                name
+                                target {
+                                  ... on Commit {
+                                    oid
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            `;
+
+            let after = null;
+            let project = null;
+            let matchedItem = null;
+
+            do {
+              const result = await github.graphql(query, {
+                owner,
+                number: projectNumber,
+                after,
+              });
+
+              project = result.user?.projectV2;
+              if (!project) {
+                throw new Error(`Could not find user project #${projectNumber} under ${owner}.`);
+              }
+
+              const itemsConnection = project.items;
+              for (const item of itemsConnection.nodes) {
+                const content = item.content;
+                if (!content || content.__typename !== "Issue") continue;
+                if (content.number !== issueNumber) continue;
+                if (content.repository?.nameWithOwner !== targetRepo) continue;
+
+                matchedItem = item;
+                break;
+              }
+
+              if (matchedItem) break;
+
+              after = itemsConnection.pageInfo.hasNextPage
+                ? itemsConnection.pageInfo.endCursor
+                : null;
+            } while (after);
+
+            if (!matchedItem) {
+              core.info(
+                `Skipping issue #${issueNumber}: not found in project #${projectNumber} (${owner}).`
+              );
+              core.setOutput("skip", "true");
+              core.setOutput("reason", "Issue is not in the configured project.");
+              return;
+            }
+
+            const projectFields = project.fields.nodes || [];
+            const statusField = projectFields.find(
+              (field) => field.name === "Status" && Array.isArray(field.options)
+            );
+            const automateField = projectFields.find(
+              (field) => field.name === "Automate Branch Creation" && Array.isArray(field.options)
+            );
+
+            if (!statusField) {
+              throw new Error('Project field "Status" was not found.');
+            }
+
+            if (!automateField) {
+              throw new Error('Project field "Automate Branch Creation" was not found.');
+            }
+
+            const fieldMap = Object.fromEntries(
+              (matchedItem.fieldValues?.nodes || [])
+                .filter((node) => node?.field?.name)
+                .map((node) => [node.field.name, node.name])
+            );
+
+            const currentStatus = fieldMap["Status"] || null;
+            const automateValue = fieldMap["Automate Branch Creation"] || null;
+
+            if (currentStatus === "Todo") {
+              const inProgressOption = statusField.options.find(
+                (option) => option.name === "In Progress"
+              );
+
+              if (!inProgressOption) {
+                throw new Error('Status option "In Progress" was not found.');
+              }
+
+              await github.graphql(
+                `
+                mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
+                  updateProjectV2ItemFieldValue(
+                    input: {
+                      projectId: $projectId
+                      itemId: $itemId
+                      fieldId: $fieldId
+                      value: { singleSelectOptionId: $optionId }
+                    }
+                  ) {
+                    projectV2Item {
+                      id
+                    }
+                  }
+                }
+                `,
+                {
+                  projectId: project.id,
+                  itemId: matchedItem.id,
+                  fieldId: statusField.id,
+                  optionId: inProgressOption.id,
+                }
+              );
+
+              core.info(`Moved issue #${issueNumber} from Todo to In Progress.`);
+            } else if (currentStatus !== "In Progress") {
+              core.info(
+                `Skipping issue #${issueNumber}: status is "${currentStatus ?? "unset"}", not Todo/In Progress.`
+              );
+              core.setOutput("skip", "true");
+              core.setOutput("reason", "Status is not Todo or In Progress.");
+              return;
+            }
+
+            if (automateValue !== "Yes") {
+              core.info(
+                `Skipping issue #${issueNumber}: "Automate Branch Creation" is "${automateValue ?? "unset"}".`
+              );
+              core.setOutput("skip", "true");
+              core.setOutput("reason", 'Automate Branch Creation is not set to "Yes".');
+              return;
+            }
+
+            if ((matchedItem.content.linkedBranches?.totalCount || 0) > 0) {
+              core.info(`Skipping issue #${issueNumber}: linked branch already exists.`);
+              core.setOutput("skip", "true");
+              core.setOutput("reason", "Issue already has a linked branch.");
+              return;
+            }
+
+            const defaultBranch = matchedItem.content.repository?.defaultBranchRef;
+            const defaultBranchName = defaultBranch?.name;
+            const defaultBranchOid = defaultBranch?.target?.oid;
+
+            if (!defaultBranchName || !defaultBranchOid) {
+              throw new Error(
+                `Could not resolve default branch name/SHA for ${targetRepo}.`
+              );
+            }
+
+            const labelNames = (payloadIssue.labels || []).map((label) => label.name);
+            const prefix = choosePrefix(labelNames);
+            const branchName = `${prefix}/${slugify(payloadIssue.title)}`;
+
+            core.setOutput("skip", "false");
+            core.setOutput(
+              "issue_json",
+              JSON.stringify({
+                issueId: matchedItem.content.id,
+                issueNumber: payloadIssue.number,
+                title: payloadIssue.title,
+                body: payloadIssue.body || "",
+                repoId: matchedItem.content.repository.id,
+                defaultBranchName,
+                defaultBranchOid,
+                branchName,
+              })
+            );
+
+      - name: Stop early when no action is needed
+        if: steps.prepare.outputs.skip == 'true'
+        run: |
+          echo "Skipping: ${{ steps.prepare.outputs.reason }}"
+
+      - name: Create linked branch
+        if: steps.prepare.outputs.skip != 'true'
+        id: create_branch
+        uses: actions/github-script@v7
+        env:
+          ISSUE_JSON: ${{ steps.prepare.outputs.issue_json }}
+        with:
+          github-token: ${{ secrets.PROJECT_PAT }}
+          script: |
+            const issue = JSON.parse(process.env.ISSUE_JSON);
+
+            const recheck = await github.graphql(
+              `
+              query($id: ID!) {
+                node(id: $id) {
+                  ... on Issue {
+                    linkedBranches(first: 1) {
+                      totalCount
+                    }
+                  }
+                }
+              }
+              `,
+              { id: issue.issueId }
+            );
+
+            if ((recheck.node?.linkedBranches?.totalCount || 0) > 0) {
+              core.info(`Issue #${issue.issueNumber} already has a linked branch. Skipping.`);
+              core.setOutput("skip", "true");
+              return;
+            }
+
+            try {
+              await github.rest.repos.getBranch({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                branch: issue.branchName,
+              });
+
+              throw new Error(
+                `Branch "${issue.branchName}" already exists but is not linked to issue #${issue.issueNumber}.`
+              );
+            } catch (error) {
+              if (error.status && error.status !== 404) {
+                throw error;
+              }
+            }
+
+            const created = await github.graphql(
+              `
+              mutation($issueId: ID!, $oid: GitObjectID!, $name: String!, $repositoryId: ID) {
+                createLinkedBranch(
+                  input: {
+                    issueId: $issueId
+                    oid: $oid
+                    name: $name
+                    repositoryId: $repositoryId
+                  }
+                ) {
+                  linkedBranch {
+                    ref {
+                      name
+                    }
+                  }
+                }
+              }
+              `,
+              {
+                issueId: issue.issueId,
+                oid: issue.defaultBranchOid,
+                name: issue.branchName,
+                repositoryId: issue.repoId,
+              }
+            );
+
+            core.setOutput("skip", "false");
+            core.setOutput("branch", created.createLinkedBranch.linkedBranch.ref.name);
+
+      - name: Check out new branch
+        if: steps.prepare.outputs.skip != 'true' && steps.create_branch.outputs.skip != 'true'
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.PROJECT_PAT }}
+          ref: ${{ steps.create_branch.outputs.branch }}
+          fetch-depth: 0
+
+      - name: Create empty bootstrap commit
+        if: steps.prepare.outputs.skip != 'true' && steps.create_branch.outputs.skip != 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git commit --allow-empty -m "Establish the branch"
+          git push origin "HEAD:${{ steps.create_branch.outputs.branch }}"
+
+      - name: Create draft PR
+        if: steps.prepare.outputs.skip != 'true' && steps.create_branch.outputs.skip != 'true'
+        uses: actions/github-script@v7
+        env:
+          ISSUE_JSON: ${{ steps.prepare.outputs.issue_json }}
+          BRANCH_NAME: ${{ steps.create_branch.outputs.branch }}
+        with:
+          github-token: ${{ secrets.PROJECT_PAT }}
+          script: |
+            const issue = JSON.parse(process.env.ISSUE_JSON);
+            const branchName = process.env.BRANCH_NAME;
+
+            const existing = await github.rest.pulls.list({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: "open",
+              head: `${context.repo.owner}:${branchName}`,
+            });
+
+            if (existing.data.length > 0) {
+              core.info(`PR already exists for ${branchName}.`);
+              return;
+            }
+
+            const summaryText = issue.body.trim()
+              ? issue.body.trim()
+              : "_No issue description provided._";
+
+            const prBody = [
+              "## Summary",
+              "",
+              summaryText,
+              "",
+              `Closes #${issue.issueNumber}`,
+              "",
+              "## Description",
+              "",
+              "- Replace this section with a detailed dive of design decisions.",
+              "",
+              "## Testing",
+              "",
+              "- Replace this section with how the PR branch maker tested the changes."
+            ].join("\n");
+
+            const created = await github.graphql(
+              `
+              mutation(
+                $repositoryId: ID!,
+                $baseRefName: String!,
+                $headRefName: String!,
+                $title: String!,
+                $body: String!
+              ) {
+                createPullRequest(
+                  input: {
+                    repositoryId: $repositoryId
+                    baseRefName: $baseRefName
+                    headRefName: $headRefName
+                    title: $title
+                    body: $body
+                    draft: true
+                  }
+                ) {
+                  pullRequest {
+                    number
+                    url
+                  }
+                }
+              }
+              `,
+              {
+                repositoryId: issue.repoId,
+                baseRefName: issue.defaultBranchName,
+                headRefName: branchName,
+                title: issue.title,
+                body: prBody,
+              }
+            );
+
+            core.info(
+              `Created draft PR #${created.createPullRequest.pullRequest.number}: ${created.createPullRequest.pullRequest.url}`
+            );
