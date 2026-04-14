@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 
+from sim.core.database import Database
 
 @dataclass
 class Simulation:
@@ -31,6 +32,23 @@ class Simulation:
 	# Internal timing values for ticking the simulation over time.
 	_time_accumulator: float = 0.0
 	tick_interval: float = 1.0
+	database: Database = field(init=False, repr=False)
+
+	def __post_init__(self) -> None:
+		"""
+		Purpose:
+			Initialize systems that should not be passed directly into the
+			dataclass constructor.
+
+		Inputs:
+			None.
+
+		Outputs:
+			None. Creates the database connection and ensures the schema exists.
+		"""
+
+		self.database = Database()
+		self.database.initialize()
 
 	def start(self) -> None:
 		"""
@@ -211,3 +229,17 @@ class Simulation:
 		# Prevent the log from growing forever during early prototyping.
 		if len(self.event_log) > 50:
 			self.event_log.pop(0)
+
+	def shutdown(self) -> None:
+		"""
+		Purpose:
+			Clean up long-lived resources before the application exits.
+
+		Inputs:
+			None.
+
+		Outputs:
+			None. Closes the database connection.
+		"""
+
+		self.database.close()
