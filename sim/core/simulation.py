@@ -20,7 +20,7 @@ class Simulation:
 	"""
 
 	# Starts empty so the app can launch before the user creates anything.
-	rooms: list[str] = field(default_factory=list)
+	rooms: list[dict] = field(default_factory=list)
 	characters: list[dict] = field(default_factory=list)
 	event_log: list[str] = field(default_factory=list)
 
@@ -134,20 +134,22 @@ class Simulation:
 		self.is_paused = False
 		self._time_accumulator = 0.0
 
-	def add_room(self, room_name: str) -> None:
+	def add_room(self, room_data: dict) -> None:
 		"""
 		Purpose:
 			Add a room to the simulation if it does not already exist.
 
 		Inputs:
-			room_name: The room name to add.
+			room_data: A dictionary representing one room.
 
 		Outputs:
-			None. Appends the room name if it is valid and not already present.
+			None. Appends the room if it is valid and not already present.
 		"""
 
-		if room_name and room_name not in self.rooms:
-			self.rooms.append(room_name)
+		if room_data:
+			room_id = room_data.get("id")
+			if not any(r.get("id") == room_id for r in self.rooms):
+				self.rooms.append(room_data)
 
 	def add_character(self, character: dict) -> None:
 		"""
@@ -165,7 +167,7 @@ class Simulation:
 		if character:
 			self.characters.append(character)
 
-	def load_state(self, rooms: list[str], characters: list[dict]) -> None:
+	def load_state(self, rooms: list[dict], characters: list[dict]) -> None:
 		"""
 		Purpose:
 			Replace the current simulation content with externally provided data.
@@ -173,7 +175,7 @@ class Simulation:
 			creator flow.
 
 		Inputs:
-			rooms: A list of room names.
+			rooms: A list of room dictionaries.
 			characters: A list of character dictionaries.
 
 		Outputs:
@@ -187,6 +189,36 @@ class Simulation:
 		self.is_running = False
 		self.is_paused = False
 		self._time_accumulator = 0.0
+
+	def save_to_db(self) -> None:
+		"""
+		Purpose:
+			Serialize and save the current simulation state to the database.
+		"""
+		for room in self.rooms:
+			room_id = room.get("id", "default_room")
+			size = room.get("size", 10)
+			desc = room.get("description", "A room.")
+			self.database.upsert_room(room_id, size, desc)
+
+		for char in self.characters:
+			char_id = char.get("id", char.get("name", "unknown_id"))
+			name = char.get("name", "Unknown")
+			background = char.get("background", "No background")
+			personality = char.get("personality", "No personality")
+			room_id = char.get("current_room_id")
+			self.database.upsert_character(char_id, name, background, personality, room_id)
+
+	def load_from_db(self) -> None:
+		"""
+		Purpose:
+			Load the simulation state from the database.
+		"""
+		db_rooms = self.database.get_all_rooms()
+		db_characters = self.database.get_all_characters()
+
+		self.rooms = [dict(r) for r in db_rooms]
+		self.characters = [dict(c) for c in db_characters]
 
 	def update(self, dt: float) -> None:
 		"""

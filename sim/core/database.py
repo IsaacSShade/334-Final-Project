@@ -154,6 +154,31 @@ class Database:
 		self.connection.commit()
 		return room_id
 
+	def upsert_room(self, room_id: str, size: int, description: str) -> None:
+		"""
+		Purpose:
+			Insert or update a room in the database.
+
+		Inputs:
+			room_id: Identifier of the room.
+			size: Non-negative room size value.
+			description: Human-readable room description.
+
+		Outputs:
+			None.
+		"""
+		self.connection.execute(
+			"""
+			INSERT INTO rooms (id, size, description)
+			VALUES (?, ?, ?)
+			ON CONFLICT(id) DO UPDATE SET
+				size=excluded.size,
+				description=excluded.description
+			""",
+			(room_id, size, description),
+		)
+		self.connection.commit()
+
 	def update_room_description(self, room_id: str, description: str) -> None:
 		"""
 		Purpose:
@@ -210,6 +235,42 @@ class Database:
 		)
 		self.connection.commit()
 		return character_id
+
+	def upsert_character(
+		self,
+		character_id: str,
+		name: str,
+		background: str,
+		personality: str,
+		current_room_id: Optional[str] = None,
+	) -> None:
+		"""
+		Purpose:
+			Insert or update a character in the database.
+
+		Inputs:
+			character_id: The identifier for the character.
+			name: Character name.
+			background: Character backstory/background text.
+			personality: Character personality text.
+			current_room_id: Optional room the character currently occupies.
+
+		Outputs:
+			None.
+		"""
+		self.connection.execute(
+			"""
+			INSERT INTO characters (id, name, background, personality, current_room_id)
+			VALUES (?, ?, ?, ?, ?)
+			ON CONFLICT(id) DO UPDATE SET
+				name=excluded.name,
+				background=excluded.background,
+				personality=excluded.personality,
+				current_room_id=excluded.current_room_id
+			""",
+			(character_id, name, background, personality, current_room_id),
+		)
+		self.connection.commit()
 
 	def move_character(self, character_id: str, room_id: Optional[str]) -> None:
 		"""
@@ -381,4 +442,32 @@ class Database:
 			""",
 			(limit,),
 		)
+		return list(cursor.fetchall())
+
+	def get_all_rooms(self) -> list[sqlite3.Row]:
+		"""
+		Purpose:
+			Fetch all rooms currently in the database.
+
+		Inputs:
+			None.
+
+		Outputs:
+			A list of sqlite3.Row objects.
+		"""
+		cursor = self.connection.execute("SELECT * FROM rooms")
+		return list(cursor.fetchall())
+
+	def get_all_characters(self) -> list[sqlite3.Row]:
+		"""
+		Purpose:
+			Fetch all characters currently in the database.
+
+		Inputs:
+			None.
+
+		Outputs:
+			A list of sqlite3.Row objects.
+		"""
+		cursor = self.connection.execute("SELECT * FROM characters")
 		return list(cursor.fetchall())
