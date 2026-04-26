@@ -49,6 +49,9 @@ class Window:
 		pygame.display.set_caption(self.title)
 		clock = pygame.time.Clock()
 
+		# Load simulation state before starting the loop
+		self.simulation.load_from_db()
+
 		running = True
 		while running:
 			dt = clock.tick(60) / 1000.0
@@ -61,6 +64,10 @@ class Window:
 
 			screen.fill((20, 20, 28))
 			pygame.display.flip()
+
+		# Save simulation state before exiting
+		self.simulation.save_to_db()
+		self.simulation.shutdown()
 
 		pygame.quit()
 		sys.exit()

@@ -1,6 +1,8 @@
 from dataclasses import dataclass, field
+from typing import Optional
 
 from sim.core.database import Database
+from sim.services.llm_client import OllamaClient
 
 @dataclass
 class Simulation:
@@ -20,7 +22,7 @@ class Simulation:
 	"""
 
 	# Starts empty so the app can launch before the user creates anything.
-	rooms: list[str] = field(default_factory=list)
+	rooms: list[dict] = field(default_factory=list)
 	characters: list[dict] = field(default_factory=list)
 	event_log: list[str] = field(default_factory=list)
 
@@ -32,7 +34,9 @@ class Simulation:
 	# Internal timing values for ticking the simulation over time.
 	_time_accumulator: float = 0.0
 	tick_interval: float = 1.0
+	db_path: Optional[str] = None
 	database: Database = field(init=False, repr=False)
+	llm_client: OllamaClient = field(init=False, repr=False)
 
 	def __post_init__(self) -> None:
 		"""
@@ -47,9 +51,10 @@ class Simulation:
 			None. Creates the database connection and ensures the schema exists.
 		"""
 
-		self.database = Database()
+		self.database = Database(self.db_path)
 		self.database.initialize()
 		self._initialize_default_world()
+		self.llm_client = OllamaClient.from_env()
 
 	def _initialize_default_world(self) -> None:
 		"""
@@ -72,6 +77,20 @@ class Simulation:
 			
 			self.add_room("lobby")
 			self.add_room("library")
+
+	def get_model_startup_warning(self) -> Optional[str]:
+		"""
+		Purpose:
+			Expose any user-facing model availability warning at startup time.
+
+		Inputs:
+			None.
+
+		Outputs:
+			A warning string when the current Ollama configuration is not ready,
+			otherwise None.
+		"""
+		return self.llm_client.get_startup_warning()
 
 	def start(self) -> None:
 		"""
@@ -157,20 +176,22 @@ class Simulation:
 		self.is_paused = False
 		self._time_accumulator = 0.0
 
-	def add_room(self, room_name: str) -> None:
+	def add_room(self, room_data: dict) -> None:
 		"""
 		Purpose:
 			Add a room to the simulation if it does not already exist.
 
 		Inputs:
-			room_name: The room name to add.
+			room_data: A dictionary representing one room.
 
 		Outputs:
-			None. Appends the room name if it is valid and not already present.
+			None. Appends the room if it is valid and not already present.
 		"""
 
-		if room_name and room_name not in self.rooms:
-			self.rooms.append(room_name)
+		if room_data:
+			room_id = room_data.get("id")
+			if not any(r.get("id") == room_id for r in self.rooms):
+				self.rooms.append(room_data)
 
 	def add_character(self, character: dict) -> None:
 		"""
@@ -188,7 +209,7 @@ class Simulation:
 		if character:
 			self.characters.append(character)
 
-	def load_state(self, rooms: list[str], characters: list[dict]) -> None:
+	def load_state(self, rooms: list[dict], characters: list[dict]) -> None:
 		"""
 		Purpose:
 			Replace the current simulation content with externally provided data.
@@ -196,7 +217,7 @@ class Simulation:
 			creator flow.
 
 		Inputs:
-			rooms: A list of room names.
+			rooms: A list of room dictionaries.
 			characters: A list of character dictionaries.
 
 		Outputs:
@@ -210,6 +231,36 @@ class Simulation:
 		self.is_running = False
 		self.is_paused = False
 		self._time_accumulator = 0.0
+
+	def save_to_db(self) -> None:
+		"""
+		Purpose:
+			Serialize and save the current simulation state to the database.
+		"""
+		for room in self.rooms:
+			room_id = room.get("id", "default_room")
+			size = room.get("size", 10)
+			desc = room.get("description", "A room.")
+			self.database.upsert_room(room_id, size, desc)
+
+		for char in self.characters:
+			char_id = char.get("id", char.get("name", "unknown_id"))
+			name = char.get("name", "Unknown")
+			background = char.get("background", "No background")
+			personality = char.get("personality", "No personality")
+			room_id = char.get("current_room_id")
+			self.database.upsert_character(char_id, name, background, personality, room_id)
+
+	def load_from_db(self) -> None:
+		"""
+		Purpose:
+			Load the simulation state from the database.
+		"""
+		db_rooms = self.database.get_all_rooms()
+		db_characters = self.database.get_all_characters()
+
+		self.rooms = [dict(r) for r in db_rooms]
+		self.characters = [dict(c) for c in db_characters]
 
 	def update(self, dt: float) -> None:
 		"""
@@ -266,3 +317,51 @@ class Simulation:
 		"""
 
 		self.database.close()
+
+
+	def create_character(self) -> dict:
+		"""
+		Purpose:
+			Interactively create a new character through console prompts.
+
+		Inputs:
+			None. Prompts user for input.
+
+		Outputs:
+			The created character dictionary that was added to the simulation.
+		"""
+		print("\n=== Character Creator ===")
+		
+		# Get character name
+		while True:
+			name = input("Enter character name: ").strip()
+			if name:
+				break
+			print("Name cannot be empty. Please try again.")
+		
+		# Get background
+		while True:
+			background = input("Enter character background: ").strip()
+			if background:
+				break
+			print("Background cannot be empty. Please try again.")
+		
+		# Get personality
+		while True:
+			personality = input("Enter character personality: ").strip()
+			if personality:
+				break
+			print("Personality cannot be empty. Please try again.")
+		
+		# Create character dict
+		character = {
+			"name": name,
+			"background": background,
+			"personality": personality
+		}
+		
+		# Add to simulation
+		self.add_character(character)
+		
+		print(f"\nCharacter '{name}' created successfully!")
+		return character

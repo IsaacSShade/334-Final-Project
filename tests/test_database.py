@@ -1,8 +1,10 @@
-import tempfile
 import unittest
+import uuid
 from pathlib import Path
 
 from sim.core.database import Database
+
+TESTS_DIR = Path(__file__).resolve().parent
 
 
 class TestDatabase(unittest.TestCase):
@@ -28,9 +30,10 @@ class TestDatabase(unittest.TestCase):
 		Outputs:
 			None.
 		"""
-		with tempfile.TemporaryDirectory() as temp_dir:
-			db_path = Path(temp_dir) / "test_sim.db"
-			database = Database(str(db_path))
+		db_path = TESTS_DIR / f"test_sim_{uuid.uuid4().hex}.db"
+		database = Database(str(db_path))
+
+		try:
 			database.initialize()
 
 			room_id = database.create_room(
@@ -67,8 +70,43 @@ class TestDatabase(unittest.TestCase):
 			self.assertEqual(len(events), 1)
 			self.assertEqual(memories[0]["memory_type"], "short_term")
 			self.assertEqual(events[0]["turn_number"], 1)
-
+		finally:
 			database.close()
+			db_path.unlink(missing_ok=True)
+
+	def test_upsert_and_get_all(self) -> None:
+		"""
+		Purpose:
+			Verify that upserting rooms and characters works, and that they can be retrieved.
+		"""
+		db_path = TESTS_DIR / f"test_sim_upsert_{uuid.uuid4().hex}.db"
+		database = Database(str(db_path))
+
+		try:
+			database.initialize()
+
+			# Insert new room and character via upsert
+			database.upsert_room("room_1", 20, "A large testing room")
+			database.upsert_character("char_1", "Bob", "Builder", "Happy", "room_1")
+
+			rooms = database.get_all_rooms()
+			characters = database.get_all_characters()
+
+			self.assertEqual(len(rooms), 1)
+			self.assertEqual(rooms[0]["id"], "room_1")
+			self.assertEqual(len(characters), 1)
+			self.assertEqual(characters[0]["id"], "char_1")
+
+			# Upsert existing to check if it updates instead of duplicating
+			database.upsert_room("room_1", 30, "An expanded testing room")
+			rooms_updated = database.get_all_rooms()
+			
+			self.assertEqual(len(rooms_updated), 1)
+			self.assertEqual(rooms_updated[0]["size"], 30)
+			self.assertEqual(rooms_updated[0]["description"], "An expanded testing room")
+		finally:
+			database.close()
+			db_path.unlink(missing_ok=True)
 
 	def test_default_room_creation_and_connections(self) -> None:
 		"""
