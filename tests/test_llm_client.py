@@ -25,4 +25,4 @@ class TestOllamaClient(unittest.TestCase):
 		client = OllamaClient.from_env()
 		self.assertEqual(client.mode, "local")
 		self.assertEqual(client.base_url, "http://localhost:11434")
-		self.assertEqual(client.model, "qwen3:30b")
+		self.assertEqual(client.model, "gpt-oss:20b-cloud")

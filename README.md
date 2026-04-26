@@ -96,8 +96,8 @@ This project is planned around the following tools and technologies:
 
 * **Python 3.10**
 * **Linux** (Ubuntu/Debian recommended)
-* **Ollama Local** (recommended default)
-* **Ollama Cloud** (optional)
+* **Ollama Local** with a cloud-backed model (recommended default)
+* **Direct Ollama Cloud API** (optional)
 * **SQLite** or **JSON** for initial memory and state storage
 * **Custom Python scripts** or **Pygame** for simulation and environment logic
 
@@ -126,19 +126,32 @@ This project is planned around the following tools and technologies:
 
    Install and launch the Ollama desktop app for your platform so the local API is available at `http://localhost:11434`.
 
-   Recommended local workflow:
+   This project defaults to **local Ollama mode** with a **cloud-backed model**. That means the app talks to your local Ollama installation, and Ollama can offload the model to its cloud service after you sign in.
+
+   Recommended local cloud-backed workflow:
    ```bash
    make ollama-check
+   make ollama-signin
    make ollama-pull
    ```
 
-   The project now defaults to local Ollama mode, so no API key is required for normal development.
+   Default model:
+   ```bash
+   gpt-oss:20b-cloud
+   ```
+
+   No API key is required for the default workflow because authentication is handled by the local Ollama app after `ollama signin`.
+
+   Optional one-off model test:
+   ```bash
+   make ollama-run-cloud
+   ```
 
    Optional cloud override:
    ```bash
    OLLAMA_MODE=cloud OLLAMA_BASE_URL=https://ollama.com/api python main.py
    ```
-   If you explicitly use cloud mode, you must also provide `OLLAMA_API_KEY`.
+   If you explicitly use direct cloud mode, you must also provide `OLLAMA_API_KEY`.
 
 5. **Run the project**
    ```bash

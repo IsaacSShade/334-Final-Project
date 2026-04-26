@@ -24,7 +24,7 @@ class OllamaClient:
 
 	mode: str = "local"
 	base_url: str = "http://localhost:11434"
-	model: str = "qwen3:30b"
+	model: str = "gpt-oss:20b-cloud"
 	api_key: Optional[str] = None
 
 	@classmethod
@@ -42,7 +42,7 @@ class OllamaClient:
 		return cls(
 			mode=os.environ.get("OLLAMA_MODE", "local"),
 			base_url=os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434"),
-			model=os.environ.get("OLLAMA_MODEL", "qwen3:30b"),
+			model=os.environ.get("OLLAMA_MODEL", "gpt-oss:20b-cloud"),
 			api_key=os.environ.get("OLLAMA_API_KEY"),
 		)
 
