@@ -49,6 +49,29 @@ class Simulation:
 
 		self.database = Database()
 		self.database.initialize()
+		self._initialize_default_world()
+
+	def _initialize_default_world(self) -> None:
+		"""
+		Purpose:
+			Create default rooms (Lobby and Library) if the database is empty.
+		"""
+		cursor = self.database.connection.execute("SELECT id FROM rooms LIMIT 1")
+		if not cursor.fetchone():
+			self.database.create_room(
+				size=20,
+				description="A grand lobby with marble floors and a large chandelier.",
+				room_id="lobby"
+			)
+			self.database.create_room(
+				size=15,
+				description="A quiet library filled with dusty books and comfortable chairs.",
+				room_id="library"
+			)
+			self.database.connect_rooms("lobby", "library")
+			
+			self.add_room("lobby")
+			self.add_room("library")
 
 	def start(self) -> None:
 		"""

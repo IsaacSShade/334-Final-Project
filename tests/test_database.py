@@ -70,6 +70,32 @@ class TestDatabase(unittest.TestCase):
 
 			database.close()
 
+	def test_default_room_creation_and_connections(self) -> None:
+		"""
+		Purpose:
+			Verify that default rooms can be connected and default agents start in the lobby.
+		"""
+		with tempfile.TemporaryDirectory() as temp_dir:
+			db_path = Path(temp_dir) / "test_default_rooms.db"
+			database = Database(str(db_path))
+			database.initialize()
+
+			# Create default rooms and connect them manually as Simulation would
+			database.create_room(size=20, description="Lobby", room_id="lobby")
+			database.create_room(size=15, description="Library", room_id="library")
+			database.connect_rooms("lobby", "library")
+
+			# Verify two-way connection
+			cursor = database.connection.execute("SELECT room_id_2 FROM room_connections WHERE room_id_1 = 'lobby'")
+			connected_rooms = [row["room_id_2"] for row in cursor.fetchall()]
+			self.assertIn("library", connected_rooms)
+
+			# Verify default agent room assignment
+			char_id = database.create_character(name="Agent Smith", background="A test agent.", personality="Stoic.")
+			cursor = database.connection.execute("SELECT current_room_id FROM characters WHERE id = ?", (char_id,))
+			self.assertEqual(cursor.fetchone()["current_room_id"], "lobby")
+
+			database.close()
 
 if __name__ == "__main__":
 	unittest.main()

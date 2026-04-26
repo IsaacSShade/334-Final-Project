@@ -75,6 +75,14 @@ class Database:
 			FOREIGN KEY (current_room_id) REFERENCES rooms(id) ON DELETE SET NULL
 		);
 
+		CREATE TABLE IF NOT EXISTS room_connections (
+			room_id_1 TEXT NOT NULL,
+			room_id_2 TEXT NOT NULL,
+			PRIMARY KEY (room_id_1, room_id_2),
+			FOREIGN KEY (room_id_1) REFERENCES rooms(id) ON DELETE CASCADE,
+			FOREIGN KEY (room_id_2) REFERENCES rooms(id) ON DELETE CASCADE
+		);
+
 		CREATE TABLE IF NOT EXISTS events (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			turn_number INTEGER NOT NULL,
@@ -176,6 +184,28 @@ class Database:
 		)
 		self.connection.commit()
 
+	def connect_rooms(self, room_id_1: str, room_id_2: str) -> None:
+		"""
+		Purpose:
+			Create a two-way connection between two rooms to allow navigation.
+
+		Inputs:
+			room_id_1: First room's ID.
+			room_id_2: Second room's ID.
+
+		Outputs:
+			None.
+		"""
+		self.connection.execute(
+			"INSERT OR IGNORE INTO room_connections (room_id_1, room_id_2) VALUES (?, ?)",
+			(room_id_1, room_id_2),
+		)
+		self.connection.execute(
+			"INSERT OR IGNORE INTO room_connections (room_id_1, room_id_2) VALUES (?, ?)",
+			(room_id_2, room_id_1),
+		)
+		self.connection.commit()
+
 	def create_character(
 		self,
 		name: str,
@@ -200,6 +230,12 @@ class Database:
 		"""
 		if character_id is None:
 			character_id = str(uuid.uuid4())
+
+		if current_room_id is None:
+			# Try to place the agent in the lobby by default if it exists
+			cursor = self.connection.execute("SELECT id FROM rooms WHERE id = 'lobby'")
+			if cursor.fetchone():
+				current_room_id = 'lobby'
 
 		self.connection.execute(
 			"""
