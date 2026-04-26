@@ -1,6 +1,8 @@
 from dataclasses import dataclass, field
+from typing import Optional
 
 from sim.core.database import Database
+from sim.services.llm_client import OllamaClient
 
 @dataclass
 class Simulation:
@@ -32,7 +34,9 @@ class Simulation:
 	# Internal timing values for ticking the simulation over time.
 	_time_accumulator: float = 0.0
 	tick_interval: float = 1.0
+	db_path: Optional[str] = None
 	database: Database = field(init=False, repr=False)
+	llm_client: OllamaClient = field(init=False, repr=False)
 
 	def __post_init__(self) -> None:
 		"""
@@ -47,8 +51,23 @@ class Simulation:
 			None. Creates the database connection and ensures the schema exists.
 		"""
 
-		self.database = Database()
+		self.database = Database(self.db_path)
 		self.database.initialize()
+		self.llm_client = OllamaClient.from_env()
+
+	def get_model_startup_warning(self) -> Optional[str]:
+		"""
+		Purpose:
+			Expose any user-facing model availability warning at startup time.
+
+		Inputs:
+			None.
+
+		Outputs:
+			A warning string when the current Ollama configuration is not ready,
+			otherwise None.
+		"""
+		return self.llm_client.get_startup_warning()
 
 	def start(self) -> None:
 		"""

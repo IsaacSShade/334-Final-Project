@@ -1,10 +1,19 @@
 import unittest
+import uuid
+from pathlib import Path
 from unittest.mock import patch
 from sim.core.simulation import Simulation
 
+TESTS_DIR = Path(__file__).resolve().parent
+
 class TestSimulation(unittest.TestCase):
     def setUp(self) -> None:
-        self.sim = Simulation()
+        self.db_path = TESTS_DIR / f"simulation_test_{uuid.uuid4().hex}.db"
+        self.sim = Simulation(db_path=str(self.db_path))
+
+    def tearDown(self) -> None:
+        self.sim.shutdown()
+        self.db_path.unlink(missing_ok=True)
 
     @patch('builtins.input', side_effect=['Alice', 'A curious explorer', 'Adventurous and friendly'])
     def test_create_character_success(self, mock_input):

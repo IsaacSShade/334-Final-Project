@@ -101,11 +101,46 @@ class Database:
 		CREATE INDEX IF NOT EXISTS idx_events_turn_number
 		ON events(turn_number);
 
+		CREATE TABLE IF NOT EXISTS conversations (
+			id TEXT PRIMARY KEY,
+			turn_number INTEGER NOT NULL,
+			room_id TEXT NOT NULL,
+			initiator_id TEXT NOT NULL,
+			recipient_id TEXT NOT NULL,
+			status TEXT NOT NULL,
+			exchange_count INTEGER NOT NULL DEFAULT 0,
+			summary TEXT,
+			FOREIGN KEY (room_id) REFERENCES rooms(id),
+			FOREIGN KEY (initiator_id) REFERENCES characters(id),
+			FOREIGN KEY (recipient_id) REFERENCES characters(id)
+		);
+
+		CREATE TABLE IF NOT EXISTS conversation_messages (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			conversation_id TEXT NOT NULL,
+			speaker_id TEXT NOT NULL,
+			exchange_number INTEGER NOT NULL,
+			message TEXT NOT NULL,
+			should_end INTEGER NOT NULL DEFAULT 0,
+			end_reason TEXT,
+			FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+			FOREIGN KEY (speaker_id) REFERENCES characters(id)
+		);
+
 		CREATE INDEX IF NOT EXISTS idx_memories_character_id
 		ON memories(character_id);
 
 		CREATE INDEX IF NOT EXISTS idx_memories_character_type
 		ON memories(character_id, memory_type);
+
+		CREATE INDEX IF NOT EXISTS idx_characters_current_room
+		ON characters(current_room_id);
+
+		CREATE INDEX IF NOT EXISTS idx_events_room_id
+		ON events(room_id);
+
+		CREATE INDEX IF NOT EXISTS idx_conversation_messages_conversation
+		ON conversation_messages(conversation_id, exchange_number);
 		"""
 		self.connection.executescript(schema)
 		self.connection.commit()
@@ -294,6 +329,98 @@ class Database:
 		)
 		self.connection.commit()
 
+	def get_room(self, room_id: str) -> Optional[sqlite3.Row]:
+		"""
+		Purpose:
+			Fetch a single room by its identifier.
+
+		Inputs:
+			room_id: The room identifier to fetch.
+
+		Outputs:
+			A sqlite3.Row if found, otherwise None.
+		"""
+		cursor = self.connection.execute(
+			"""
+			SELECT *
+			FROM rooms
+			WHERE id = ?
+			""",
+			(room_id,),
+		)
+		return cursor.fetchone()
+
+	def get_character(self, character_id: str) -> Optional[sqlite3.Row]:
+		"""
+		Purpose:
+			Fetch a single character by identifier.
+
+		Inputs:
+			character_id: The character identifier to fetch.
+
+		Outputs:
+			A sqlite3.Row if found, otherwise None.
+		"""
+		cursor = self.connection.execute(
+			"""
+			SELECT *
+			FROM characters
+			WHERE id = ?
+			""",
+			(character_id,),
+		)
+		return cursor.fetchone()
+
+	def get_characters_in_room(self, room_id: str) -> list[sqlite3.Row]:
+		"""
+		Purpose:
+			Fetch all characters currently assigned to a room.
+
+		Inputs:
+			room_id: The room identifier.
+
+		Outputs:
+			A list of sqlite3.Row objects.
+		"""
+		cursor = self.connection.execute(
+			"""
+			SELECT *
+			FROM characters
+			WHERE current_room_id = ?
+			ORDER BY name
+			""",
+			(room_id,),
+		)
+		return list(cursor.fetchall())
+
+	def get_recent_room_events(
+		self,
+		room_id: str,
+		limit: int = 20,
+	) -> list[sqlite3.Row]:
+		"""
+		Purpose:
+			Fetch recent events tied to a specific room.
+
+		Inputs:
+			room_id: The room identifier.
+			limit: Maximum number of events to return.
+
+		Outputs:
+			A list of sqlite3.Row objects.
+		"""
+		cursor = self.connection.execute(
+			"""
+			SELECT *
+			FROM events
+			WHERE room_id = ?
+			ORDER BY turn_number DESC, id DESC
+			LIMIT ?
+			""",
+			(room_id, limit),
+		)
+		return list(cursor.fetchall())
+
 	def create_event(
 		self,
 		turn_number: int,
@@ -441,6 +568,185 @@ class Database:
 			LIMIT ?
 			""",
 			(limit,),
+		)
+		return list(cursor.fetchall())
+
+	def create_conversation(
+		self,
+		turn_number: int,
+		room_id: str,
+		initiator_id: str,
+		recipient_id: str,
+		status: str = "active",
+		conversation_id: Optional[str] = None,
+	) -> str:
+		"""
+		Purpose:
+			Create a conversation row before transcript messages are appended.
+
+		Inputs:
+			turn_number: The current simulation turn.
+			room_id: The room where the conversation occurs.
+			initiator_id: The starting speaker.
+			recipient_id: The target speaker.
+			status: Current conversation status.
+			conversation_id: Optional custom identifier.
+
+		Outputs:
+			The conversation identifier that was inserted.
+		"""
+		if conversation_id is None:
+			conversation_id = str(uuid.uuid4())
+
+		self.connection.execute(
+			"""
+			INSERT INTO conversations (
+				id,
+				turn_number,
+				room_id,
+				initiator_id,
+				recipient_id,
+				status
+			)
+			VALUES (?, ?, ?, ?, ?, ?)
+			""",
+			(
+				conversation_id,
+				turn_number,
+				room_id,
+				initiator_id,
+				recipient_id,
+				status,
+			),
+		)
+		self.connection.commit()
+		return conversation_id
+
+	def append_conversation_message(
+		self,
+		conversation_id: str,
+		speaker_id: str,
+		exchange_number: int,
+		message: str,
+		should_end: bool = False,
+		end_reason: Optional[str] = None,
+	) -> int:
+		"""
+		Purpose:
+			Append one message to a persisted conversation transcript.
+
+		Inputs:
+			conversation_id: Identifier for the conversation.
+			speaker_id: The speaking character.
+			exchange_number: 1-based message order.
+			message: The utterance text.
+			should_end: Whether the speaker is signaling a wrap-up.
+			end_reason: Optional reason the conversation should end.
+
+		Outputs:
+			The inserted transcript row ID.
+		"""
+		cursor = self.connection.execute(
+			"""
+			INSERT INTO conversation_messages (
+				conversation_id,
+				speaker_id,
+				exchange_number,
+				message,
+				should_end,
+				end_reason
+			)
+			VALUES (?, ?, ?, ?, ?, ?)
+			""",
+			(
+				conversation_id,
+				speaker_id,
+				exchange_number,
+				message,
+				int(should_end),
+				end_reason,
+			),
+		)
+		message_id = cursor.lastrowid
+		self.connection.commit()
+
+		if message_id is None:
+			raise RuntimeError("Failed to retrieve conversation message ID.")
+
+		return message_id
+
+	def complete_conversation(
+		self,
+		conversation_id: str,
+		exchange_count: int,
+		summary: str,
+		status: str = "completed",
+	) -> None:
+		"""
+		Purpose:
+			Mark a conversation finished and persist its summary.
+
+		Inputs:
+			conversation_id: Identifier for the conversation.
+			exchange_count: Number of transcript messages stored.
+			summary: Final natural-language summary.
+			status: Final status string.
+
+		Outputs:
+			None.
+		"""
+		self.connection.execute(
+			"""
+			UPDATE conversations
+			SET status = ?,
+				exchange_count = ?,
+				summary = ?
+			WHERE id = ?
+			""",
+			(status, exchange_count, summary, conversation_id),
+		)
+		self.connection.commit()
+
+	def get_conversation(self, conversation_id: str) -> Optional[sqlite3.Row]:
+		"""
+		Purpose:
+			Fetch a single conversation record.
+
+		Inputs:
+			conversation_id: Identifier for the conversation.
+
+		Outputs:
+			A sqlite3.Row if found, otherwise None.
+		"""
+		cursor = self.connection.execute(
+			"""
+			SELECT *
+			FROM conversations
+			WHERE id = ?
+			""",
+			(conversation_id,),
+		)
+		return cursor.fetchone()
+
+	def get_conversation_messages(self, conversation_id: str) -> list[sqlite3.Row]:
+		"""
+		Purpose:
+			Fetch transcript rows for one conversation.
+
+		Inputs:
+			conversation_id: Identifier for the conversation.
+
+		Outputs:
+			A list of sqlite3.Row objects ordered by exchange number.
+		"""
+		cursor = self.connection.execute(
+			"""
+			SELECT *
+			FROM conversation_messages
+			WHERE conversation_id = ?
+			ORDER BY exchange_number
+			""",
+			(conversation_id,),
 		)
 		return list(cursor.fetchall())
 
