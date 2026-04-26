@@ -53,7 +53,30 @@ class Simulation:
 
 		self.database = Database(self.db_path)
 		self.database.initialize()
+		self._initialize_default_world()
 		self.llm_client = OllamaClient.from_env()
+
+	def _initialize_default_world(self) -> None:
+		"""
+		Purpose:
+			Create default rooms (Lobby and Library) if the database is empty.
+		"""
+		cursor = self.database.connection.execute("SELECT id FROM rooms LIMIT 1")
+		if not cursor.fetchone():
+			self.database.create_room(
+				size=20,
+				description="A grand lobby with marble floors and a large chandelier.",
+				room_id="lobby"
+			)
+			self.database.create_room(
+				size=15,
+				description="A quiet library filled with dusty books and comfortable chairs.",
+				room_id="library"
+			)
+			self.database.connect_rooms("lobby", "library")
+			
+			self.add_room("lobby")
+			self.add_room("library")
 
 	def get_model_startup_warning(self) -> Optional[str]:
 		"""
@@ -153,22 +176,28 @@ class Simulation:
 		self.is_paused = False
 		self._time_accumulator = 0.0
 
-	def add_room(self, room_data: dict) -> None:
+	def add_room(self, room_data: dict | str) -> None:
 		"""
 		Purpose:
 			Add a room to the simulation if it does not already exist.
 
 		Inputs:
-			room_data: A dictionary representing one room.
+			room_data: A dictionary representing one room, or a string room ID.
 
 		Outputs:
 			None. Appends the room if it is valid and not already present.
 		"""
 
-		if room_data:
-			room_id = room_data.get("id")
-			if not any(r.get("id") == room_id for r in self.rooms):
-				self.rooms.append(room_data)
+		if not room_data:
+			return
+			
+		if isinstance(room_data, str):
+			room_row = self.database.get_room(room_data)
+			room_data = dict(room_row) if room_row else {"id": room_data, "size": 10, "description": "A room."}
+
+		room_id = room_data.get("id")
+		if not any(r.get("id") == room_id for r in self.rooms):
+			self.rooms.append(room_data)
 
 	def add_character(self, character: dict) -> None:
 		"""
