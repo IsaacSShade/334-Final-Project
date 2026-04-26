@@ -243,3 +243,51 @@ class Simulation:
 		"""
 
 		self.database.close()
+
+
+	def create_character(self) -> dict:
+		"""
+		Purpose:
+			Interactively create a new character through console prompts.
+
+		Inputs:
+			None. Prompts user for input.
+
+		Outputs:
+			The created character dictionary that was added to the simulation.
+		"""
+		print("\n=== Character Creator ===")
+		
+		# Get character name
+		while True:
+			name = input("Enter character name: ").strip()
+			if name:
+				break
+			print("Name cannot be empty. Please try again.")
+		
+		# Get background
+		while True:
+			background = input("Enter character background: ").strip()
+			if background:
+				break
+			print("Background cannot be empty. Please try again.")
+		
+		# Get personality
+		while True:
+			personality = input("Enter character personality: ").strip()
+			if personality:
+				break
+			print("Personality cannot be empty. Please try again.")
+		
+		# Create character dict
+		character = {
+			"name": name,
+			"background": background,
+			"personality": personality
+		}
+		
+		# Add to simulation
+		self.add_character(character)
+		
+		print(f"\nCharacter '{name}' created successfully!")
+		return character
