@@ -18,12 +18,12 @@ class OllamaClientError(RuntimeError):
 class OllamaClient:
 	"""
 	Purpose:
-		Provide a small Ollama API client that supports both cloud and local
-		configurations with the same interface.
+	Provide a small Ollama API client that supports both cloud and local
+	configurations with the same interface.
 	"""
 
-	mode: str = "cloud"
-	base_url: str = "https://ollama.com/api"
+	mode: str = "local"
+	base_url: str = "http://localhost:11434"
 	model: str = "qwen3:30b"
 	api_key: Optional[str] = None
 
@@ -40,8 +40,8 @@ class OllamaClient:
 			A configured OllamaClient instance.
 		"""
 		return cls(
-			mode=os.environ.get("OLLAMA_MODE", "cloud"),
-			base_url=os.environ.get("OLLAMA_BASE_URL", "https://ollama.com/api"),
+			mode=os.environ.get("OLLAMA_MODE", "local"),
+			base_url=os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434"),
 			model=os.environ.get("OLLAMA_MODEL", "qwen3:30b"),
 			api_key=os.environ.get("OLLAMA_API_KEY"),
 		)

@@ -96,7 +96,8 @@ This project is planned around the following tools and technologies:
 
 * **Python 3.10**
 * **Linux** (Ubuntu/Debian recommended)
-* **Ollama Cloud** or **Ollama Local**
+* **Ollama Local** (recommended default)
+* **Ollama Cloud** (optional)
 * **SQLite** or **JSON** for initial memory and state storage
 * **Custom Python scripts** or **Pygame** for simulation and environment logic
 
@@ -121,13 +122,27 @@ This project is planned around the following tools and technologies:
    pip install -r requirements.txt
    ```
 
-4. **Set up Ollama**
-   
-   Configure the project to use either **Ollama Cloud** or a **local Ollama instance**, depending on your setup.
+4. **Set up the local Ollama app**
+
+   Install and launch the Ollama desktop app for your platform so the local API is available at `http://localhost:11434`.
+
+   Recommended local workflow:
+   ```bash
+   make ollama-check
+   make ollama-pull
+   ```
+
+   The project now defaults to local Ollama mode, so no API key is required for normal development.
+
+   Optional cloud override:
+   ```bash
+   OLLAMA_MODE=cloud OLLAMA_BASE_URL=https://ollama.com/api python main.py
+   ```
+   If you explicitly use cloud mode, you must also provide `OLLAMA_API_KEY`.
 
 5. **Run the project**
    ```bash
-   python main.py
+   make run
    ```
 
 Eventually this will all become part of a Makefile

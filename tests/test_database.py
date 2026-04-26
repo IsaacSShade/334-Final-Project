@@ -108,6 +108,38 @@ class TestDatabase(unittest.TestCase):
 			database.close()
 			db_path.unlink(missing_ok=True)
 
+	def test_room_events_since_turn_and_completed_turn_updates(self) -> None:
+		"""
+		Purpose:
+			Verify room backlog reads and completed-turn writes behave as expected.
+		"""
+		db_path = TESTS_DIR / f"test_sim_turns_{uuid.uuid4().hex}.db"
+		database = Database(str(db_path))
+
+		try:
+			database.initialize()
+			room_id = database.create_room(8, "A focused test room.", room_id="room_a")
+			character_id = database.create_character(
+				name="Alice",
+				background="Keeps notes.",
+				personality="Precise.",
+				current_room_id=room_id,
+				character_id="alice",
+			)
+			database.create_event(1, character_id, "Turn one event.", room_id=room_id)
+			database.create_event(2, character_id, "Turn two event.", room_id=room_id)
+
+			rows = database.get_room_events_since_turn(room_id, after_turn=1)
+			self.assertEqual(len(rows), 1)
+			self.assertEqual(rows[0]["log"], "Turn two event.")
+
+			database.update_character_last_completed_turn(character_id, 2)
+			character = database.get_character(character_id)
+			self.assertEqual(character["last_completed_turn"], 2)
+		finally:
+			database.close()
+			db_path.unlink(missing_ok=True)
+
 
 if __name__ == "__main__":
 	unittest.main()
