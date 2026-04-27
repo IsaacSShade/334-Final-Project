@@ -147,9 +147,12 @@ class Simulation:
 	def reset_world(self) -> None:
 		"""
 		Purpose:
-			Clear the full persisted world, including rooms and characters.
+			Wipe the full persisted world and re-seed it with the default rooms and
+			characters so the simulation is ready to run again immediately.
 		"""
 		self.database.clear_world()
+		self.database.clear_history()
+		seed_default_world(self.database)
 		self.orchestrator.reset_runtime()
 		self.clear()
 		self.load_from_db()
