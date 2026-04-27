@@ -296,6 +296,223 @@ class Simulation:
 		self.database.close()
 
 
+	def create_room(self) -> dict:
+		"""
+		Purpose:
+			Interactively create a new room through console prompts. Persists
+			the new room to both the in-memory list and the database so that
+			AI-driven actions (e.g. RoomUpdateAction) can later mutate it.
+
+		Inputs:
+			None. Prompts user for input.
+
+		Outputs:
+			The created room dictionary that was added to the simulation.
+		"""
+		print("\n=== Room Creator ===")
+
+		while True:
+			room_id = input("Enter room id (e.g. kitchen, lab_a): ").strip()
+			if not room_id:
+				print("Room id cannot be empty. Please try again.")
+				continue
+			if any(r.get("id") == room_id for r in self.rooms):
+				print(f"A room with id '{room_id}' already exists. Pick another id.")
+				continue
+			break
+
+		while True:
+			size_raw = input("Enter room size (non-negative integer): ").strip()
+			try:
+				size = int(size_raw)
+			except ValueError:
+				print("Size must be an integer. Please try again.")
+				continue
+			if size < 0:
+				print("Size cannot be negative. Please try again.")
+				continue
+			break
+
+		while True:
+			description = input("Enter room description: ").strip()
+			if description:
+				break
+			print("Description cannot be empty. Please try again.")
+
+		room = {"id": room_id, "size": size, "description": description}
+		self.rooms.append(room)
+		self.database.upsert_room(room_id, size, description)
+
+		print(f"\nRoom '{room_id}' created successfully!")
+		return room
+
+	def list_rooms(self) -> list[dict]:
+		"""
+		Purpose:
+			Print a numbered listing of every room in the simulation.
+
+		Inputs:
+			None.
+
+		Outputs:
+			The list of rooms (same reference as self.rooms).
+		"""
+		print("\n=== Rooms ===")
+		if not self.rooms:
+			print("(no rooms yet)")
+			return self.rooms
+
+		for index, room in enumerate(self.rooms, start=1):
+			print(
+				f"{index}. id={room.get('id')}  "
+				f"size={room.get('size')}  "
+				f"description={room.get('description')}"
+			)
+		return self.rooms
+
+	def _pick_room(self, prompt: str) -> Optional[dict]:
+		"""
+		Purpose:
+			Helper to let the user pick an existing room by its 1-based index
+			from the list shown in list_rooms.
+
+		Inputs:
+			prompt: The prompt label shown to the user.
+
+		Outputs:
+			The selected room dictionary, or None if there are no rooms or the
+			user cancels with an empty entry.
+		"""
+		if not self.rooms:
+			print("No rooms exist yet.")
+			return None
+
+		self.list_rooms()
+		while True:
+			choice = input(f"{prompt} (number, blank to cancel): ").strip()
+			if not choice:
+				return None
+			try:
+				index = int(choice)
+			except ValueError:
+				print("Please enter a number.")
+				continue
+			if 1 <= index <= len(self.rooms):
+				return self.rooms[index - 1]
+			print(f"Please enter a number between 1 and {len(self.rooms)}.")
+
+	def edit_room(self) -> Optional[dict]:
+		"""
+		Purpose:
+			Interactively edit an existing room's description and/or size.
+			Empty input leaves the existing field unchanged.
+
+		Inputs:
+			None.
+
+		Outputs:
+			The updated room dictionary, or None if the user cancelled.
+		"""
+		print("\n=== Edit Room ===")
+		room = self._pick_room("Pick a room to edit")
+		if room is None:
+			return None
+
+		size_raw = input(
+			f"New size (blank keeps {room.get('size')}): "
+		).strip()
+		if size_raw:
+			try:
+				size = int(size_raw)
+				if size < 0:
+					print("Size cannot be negative. Keeping previous value.")
+				else:
+					room["size"] = size
+			except ValueError:
+				print("Size must be an integer. Keeping previous value.")
+
+		description = input(
+			"New description (blank keeps current): "
+		).strip()
+		if description:
+			room["description"] = description
+
+		self.database.upsert_room(
+			room["id"],
+			int(room.get("size", 0)),
+			str(room.get("description", "")),
+		)
+		print(f"Room '{room['id']}' updated.")
+		return room
+
+	def delete_room(self) -> Optional[str]:
+		"""
+		Purpose:
+			Interactively delete an existing room after confirmation.
+
+		Inputs:
+			None.
+
+		Outputs:
+			The id of the deleted room, or None if the user cancelled.
+		"""
+		print("\n=== Delete Room ===")
+		room = self._pick_room("Pick a room to delete")
+		if room is None:
+			return None
+
+		confirm = input(
+			f"Type the room id '{room['id']}' to confirm deletion: "
+		).strip()
+		if confirm != room["id"]:
+			print("Deletion cancelled.")
+			return None
+
+		room_id = room["id"]
+		self.rooms = [r for r in self.rooms if r.get("id") != room_id]
+		for character in self.characters:
+			if character.get("current_room_id") == room_id:
+				character["current_room_id"] = None
+		self.database.delete_room(room_id)
+		print(f"Room '{room_id}' deleted.")
+		return room_id
+
+	def manage_rooms(self) -> None:
+		"""
+		Purpose:
+			Run an interactive room manager loop that exposes create / list /
+			edit / delete actions until the user exits.
+
+		Inputs:
+			None.
+
+		Outputs:
+			None.
+		"""
+		menu = (
+			"\n=== Room Manager ===\n"
+			"1) List rooms\n"
+			"2) Create room\n"
+			"3) Edit room\n"
+			"4) Delete room\n"
+			"5) Done\n"
+		)
+		while True:
+			print(menu)
+			choice = input("Choose an option: ").strip()
+			if choice == "1":
+				self.list_rooms()
+			elif choice == "2":
+				self.create_room()
+			elif choice == "3":
+				self.edit_room()
+			elif choice == "4":
+				self.delete_room()
+			elif choice == "5" or choice.lower() in {"done", "q", "quit", "exit"}:
+				return
+			else:
+				print("Unknown option. Please choose 1-5.")
+
 	def create_character(self) -> dict:
 		"""
 		Purpose:
