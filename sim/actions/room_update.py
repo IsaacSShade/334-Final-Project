@@ -77,6 +77,8 @@ class RoomUpdateAction:
 			character_id=character_id,
 			room_id=room_id,
 			log=change_summary or self._default_summary(character, room_id),
+			event_type="room_update",
+			event_meta={"before": current_description, "after": new_description},
 		)
 
 		return ActionResult(

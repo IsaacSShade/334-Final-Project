@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 import sqlite3
 import uuid
@@ -43,7 +44,7 @@ class Database:
 		"""
 		self.db_path.parent.mkdir(parents=True, exist_ok=True)
 
-		connection = sqlite3.connect(self.db_path)
+		connection = sqlite3.connect(self.db_path, check_same_thread=False)
 		connection.row_factory = sqlite3.Row
 		connection.execute("PRAGMA foreign_keys = ON;")
 		return connection
@@ -72,6 +73,7 @@ class Database:
 			background TEXT NOT NULL,
 			personality TEXT NOT NULL,
 			current_room_id TEXT,
+			last_completed_turn INTEGER NOT NULL DEFAULT 0,
 			FOREIGN KEY (current_room_id) REFERENCES rooms(id) ON DELETE SET NULL
 		);
 
@@ -106,9 +108,6 @@ class Database:
 			FOREIGN KEY (source_event_id) REFERENCES events(id) ON DELETE SET NULL
 		);
 
-		CREATE INDEX IF NOT EXISTS idx_events_turn_number
-		ON events(turn_number);
-
 		CREATE TABLE IF NOT EXISTS conversations (
 			id TEXT PRIMARY KEY,
 			turn_number INTEGER NOT NULL,
@@ -135,6 +134,9 @@ class Database:
 			FOREIGN KEY (speaker_id) REFERENCES characters(id)
 		);
 
+		CREATE INDEX IF NOT EXISTS idx_events_turn_number
+		ON events(turn_number);
+
 		CREATE INDEX IF NOT EXISTS idx_memories_character_id
 		ON memories(character_id);
 
@@ -144,14 +146,44 @@ class Database:
 		CREATE INDEX IF NOT EXISTS idx_characters_current_room
 		ON characters(current_room_id);
 
-		CREATE INDEX IF NOT EXISTS idx_events_room_id
-		ON events(room_id);
+		CREATE INDEX IF NOT EXISTS idx_events_room_turn
+		ON events(room_id, turn_number, id);
 
 		CREATE INDEX IF NOT EXISTS idx_conversation_messages_conversation
 		ON conversation_messages(conversation_id, exchange_number);
 		"""
 		self.connection.executescript(schema)
+		self._ensure_character_schema()
 		self.connection.commit()
+
+	def _ensure_character_schema(self) -> None:
+		"""
+		Purpose:
+			Apply lightweight schema upgrades for existing local databases.
+
+		Inputs:
+			None.
+
+		Outputs:
+			None.
+		"""
+		columns = {
+			row["name"]
+			for row in self.connection.execute("PRAGMA table_info(characters)")
+		}
+		if "last_completed_turn" not in columns:
+			self.connection.execute(
+				"""
+				ALTER TABLE characters
+				ADD COLUMN last_completed_turn INTEGER NOT NULL DEFAULT 0
+				"""
+			)
+
+		event_cols = {row["name"] for row in self.connection.execute("PRAGMA table_info(events)")}
+		if "event_type" not in event_cols:
+			self.connection.execute("ALTER TABLE events ADD COLUMN event_type TEXT")
+		if "event_meta" not in event_cols:
+			self.connection.execute("ALTER TABLE events ADD COLUMN event_meta TEXT")
 
 	def close(self) -> None:
 		"""
@@ -266,6 +298,45 @@ class Database:
 		)
 		self.connection.commit()
 
+	def get_connected_rooms(self, room_id: str) -> list:
+		"""
+		Purpose:
+			Return all rooms directly connected to the given room.
+
+		Inputs:
+			room_id: The room whose neighbours to fetch.
+
+		Outputs:
+			A list of room rows reachable from room_id.
+		"""
+		cursor = self.connection.execute(
+			"""
+			SELECT r.id, r.size, r.description
+			FROM rooms r
+			JOIN room_connections rc ON rc.room_id_2 = r.id
+			WHERE rc.room_id_1 = ?
+			""",
+			(room_id,),
+		)
+		return cursor.fetchall()
+
+	def get_all_connections(self) -> list:
+		"""
+		Purpose:
+			Return all unique room connection pairs (each pair once, room_id_1 < room_id_2).
+
+		Outputs:
+			A list of rows with room_id_1 and room_id_2.
+		"""
+		cursor = self.connection.execute(
+			"""
+			SELECT room_id_1, room_id_2
+			FROM room_connections
+			WHERE room_id_1 < room_id_2
+			"""
+		)
+		return cursor.fetchall()
+
 	def create_character(
 		self,
 		name: str,
@@ -273,6 +344,7 @@ class Database:
 		personality: str,
 		current_room_id: Optional[str] = None,
 		character_id: Optional[str] = None,
+		last_completed_turn: int = 0,
 	) -> str:
 		"""
 		Purpose:
@@ -284,6 +356,7 @@ class Database:
 			personality: Character personality text.
 			current_room_id: Optional room the character currently occupies.
 			character_id: Optional custom character identifier.
+			last_completed_turn: The latest completed world turn for this actor.
 
 		Outputs:
 			The character identifier that was inserted.
@@ -299,10 +372,24 @@ class Database:
 
 		self.connection.execute(
 			"""
-			INSERT INTO characters (id, name, background, personality, current_room_id)
-			VALUES (?, ?, ?, ?, ?)
+			INSERT INTO characters (
+				id,
+				name,
+				background,
+				personality,
+				current_room_id,
+				last_completed_turn
+			)
+			VALUES (?, ?, ?, ?, ?, ?)
 			""",
-			(character_id, name, background, personality, current_room_id),
+			(
+				character_id,
+				name,
+				background,
+				personality,
+				current_room_id,
+				last_completed_turn,
+			),
 		)
 		self.connection.commit()
 		return character_id
@@ -314,6 +401,7 @@ class Database:
 		background: str,
 		personality: str,
 		current_room_id: Optional[str] = None,
+		last_completed_turn: Optional[int] = None,
 	) -> None:
 		"""
 		Purpose:
@@ -325,21 +413,40 @@ class Database:
 			background: Character backstory/background text.
 			personality: Character personality text.
 			current_room_id: Optional room the character currently occupies.
+			last_completed_turn: Optional completed-turn override.
 
 		Outputs:
 			None.
 		"""
+		if last_completed_turn is None:
+			last_completed_turn = 0
+
 		self.connection.execute(
 			"""
-			INSERT INTO characters (id, name, background, personality, current_room_id)
-			VALUES (?, ?, ?, ?, ?)
+			INSERT INTO characters (
+				id,
+				name,
+				background,
+				personality,
+				current_room_id,
+				last_completed_turn
+			)
+			VALUES (?, ?, ?, ?, ?, ?)
 			ON CONFLICT(id) DO UPDATE SET
 				name=excluded.name,
 				background=excluded.background,
 				personality=excluded.personality,
-				current_room_id=excluded.current_room_id
+				current_room_id=excluded.current_room_id,
+				last_completed_turn=excluded.last_completed_turn
 			""",
-			(character_id, name, background, personality, current_room_id),
+			(
+				character_id,
+				name,
+				background,
+				personality,
+				current_room_id,
+				last_completed_turn,
+			),
 		)
 		self.connection.commit()
 
@@ -362,6 +469,32 @@ class Database:
 			WHERE id = ?
 			""",
 			(room_id, character_id),
+		)
+		self.connection.commit()
+
+	def update_character_last_completed_turn(
+		self,
+		character_id: str,
+		turn_number: int,
+	) -> None:
+		"""
+		Purpose:
+			Update the latest completed world turn for a character.
+
+		Inputs:
+			character_id: The character to update.
+			turn_number: The latest completed world turn number.
+
+		Outputs:
+			None.
+		"""
+		self.connection.execute(
+			"""
+			UPDATE characters
+			SET last_completed_turn = ?
+			WHERE id = ?
+			""",
+			(turn_number, character_id),
 		)
 		self.connection.commit()
 
@@ -457,12 +590,48 @@ class Database:
 		)
 		return list(cursor.fetchall())
 
+	def get_room_events_since_turn(
+		self,
+		room_id: str,
+		after_turn: int,
+		limit: Optional[int] = None,
+	) -> list[sqlite3.Row]:
+		"""
+		Purpose:
+			Fetch room-local events newer than a given completed turn.
+
+		Inputs:
+			room_id: The room whose events should be returned.
+			after_turn: Lower exclusive turn-number bound.
+			limit: Optional maximum number of rows.
+
+		Outputs:
+			A list of sqlite3.Row objects in chronological order.
+		"""
+		query = """
+		SELECT *
+		FROM events
+		WHERE room_id = ?
+			AND turn_number > ?
+		ORDER BY turn_number ASC, id ASC
+		"""
+		parameters: list[object] = [room_id, after_turn]
+
+		if limit is not None:
+			query += " LIMIT ?"
+			parameters.append(limit)
+
+		cursor = self.connection.execute(query, parameters)
+		return list(cursor.fetchall())
+
 	def create_event(
 		self,
 		turn_number: int,
 		character_id: str,
 		log: str,
 		room_id: Optional[str] = None,
+		event_type: Optional[str] = None,
+		event_meta: Optional[dict] = None,
 	) -> int:
 		"""
 		Purpose:
@@ -473,16 +642,19 @@ class Database:
 			character_id: The acting character.
 			log: Short natural-language event summary.
 			room_id: Optional room tied to the event.
+			event_type: Optional event category (e.g. 'move', 'conversation', 'room_update').
+			event_meta: Optional metadata dict serialized as JSON.
 
 		Outputs:
 			The integer event identifier that was inserted.
 		"""
+		meta_value = json.dumps(event_meta) if event_meta is not None else None
 		cursor = self.connection.execute(
 			"""
-			INSERT INTO events (turn_number, character_id, room_id, log)
-			VALUES (?, ?, ?, ?)
+			INSERT INTO events (turn_number, character_id, room_id, log, event_type, event_meta)
+			VALUES (?, ?, ?, ?, ?, ?)
 			""",
-			(turn_number, character_id, room_id, log),
+			(turn_number, character_id, room_id, log, event_type, meta_value),
 		)
 		event_id = cursor.lastrowid
 
@@ -492,6 +664,72 @@ class Database:
 
 		self.connection.commit()
 		return event_id
+
+	def get_recent_events_rich(self, limit: int = 50) -> list[dict]:
+		"""
+		Purpose:
+			Fetch recent events with character names and expanded metadata.
+
+		Inputs:
+			limit: Maximum number of events to return.
+
+		Outputs:
+			A list of plain dicts with event details, including transcripts for
+			conversation events and before/after descriptions for room updates.
+		"""
+		import json as _json
+		cursor = self.connection.execute(
+			"""
+			SELECT e.id, e.turn_number, e.room_id, e.log, e.event_type, e.event_meta,
+				   c.name AS character_name
+			FROM events e
+			LEFT JOIN characters c ON c.id = e.character_id
+			ORDER BY e.turn_number DESC, e.id DESC
+			LIMIT ?
+			""",
+			(limit,),
+		)
+		rows = cursor.fetchall()
+		result = []
+		for row in rows:
+			entry = {
+				"id": row["id"],
+				"turn": row["turn_number"],
+				"room_id": row["room_id"] or "",
+				"summary": row["log"],
+				"type": row["event_type"] or "generic",
+				"character_name": row["character_name"] or "Unknown",
+			}
+			meta = {}
+			if row["event_meta"]:
+				try:
+					meta = _json.loads(row["event_meta"])
+				except Exception:
+					pass
+			if entry["type"] == "conversation":
+				entry["conversation_id"] = meta.get("conversation_id", "")
+				transcript = []
+				if entry["conversation_id"]:
+					msgs = self.connection.execute(
+						"""
+						SELECT cm.message, c.name AS speaker_name
+						FROM conversation_messages cm
+						LEFT JOIN characters c ON c.id = cm.speaker_id
+						WHERE cm.conversation_id = ?
+						ORDER BY cm.exchange_number
+						""",
+						(entry["conversation_id"],),
+					).fetchall()
+					transcript = [{"speaker": m["speaker_name"] or "?", "message": m["message"]} for m in msgs]
+				entry["transcript"] = transcript
+			elif entry["type"] == "room_update":
+				entry["before_description"] = meta.get("before", "")
+				entry["after_description"] = meta.get("after", "")
+			elif entry["type"] == "move":
+				entry["from_room"] = meta.get("from_room", "")
+				entry["to_room"] = meta.get("to_room", "")
+			result.append(entry)
+		return result
 
 	def create_memory(
 		self,
@@ -797,7 +1035,13 @@ class Database:
 		Outputs:
 			A list of sqlite3.Row objects.
 		"""
-		cursor = self.connection.execute("SELECT * FROM rooms")
+		cursor = self.connection.execute(
+			"""
+			SELECT *
+			FROM rooms
+			ORDER BY id
+			"""
+		)
 		return list(cursor.fetchall())
 
 	def get_all_characters(self) -> list[sqlite3.Row]:
@@ -811,5 +1055,84 @@ class Database:
 		Outputs:
 			A list of sqlite3.Row objects.
 		"""
-		cursor = self.connection.execute("SELECT * FROM characters")
+		cursor = self.connection.execute(
+			"""
+			SELECT *
+			FROM characters
+			ORDER BY name
+			"""
+		)
 		return list(cursor.fetchall())
+
+	def get_latest_turn_number(self) -> int:
+		"""
+		Purpose:
+			Fetch the latest completed or recorded world turn number.
+
+		Inputs:
+			None.
+
+		Outputs:
+			The latest known world turn number, or 0 if no turns exist.
+		"""
+		row = self.connection.execute(
+			"""
+			SELECT MAX(turn_value) AS latest_turn
+			FROM (
+				SELECT COALESCE(MAX(last_completed_turn), 0) AS turn_value
+				FROM characters
+				UNION ALL
+				SELECT COALESCE(MAX(turn_number), 0) AS turn_value
+				FROM events
+				UNION ALL
+				SELECT COALESCE(MAX(turn_number), 0) AS turn_value
+				FROM conversations
+			)
+			"""
+		).fetchone()
+		if row is None or row["latest_turn"] is None:
+			return 0
+		return int(row["latest_turn"])
+
+	def clear_history(self) -> None:
+		"""
+		Purpose:
+			Clear event, conversation, and memory history while preserving rooms
+			and characters.
+
+		Inputs:
+			None.
+
+		Outputs:
+			None.
+		"""
+		self.connection.execute("DELETE FROM conversation_messages")
+		self.connection.execute("DELETE FROM conversations")
+		self.connection.execute("DELETE FROM memories")
+		self.connection.execute("DELETE FROM events")
+		self.connection.execute(
+			"""
+			UPDATE characters
+			SET last_completed_turn = 0
+			"""
+		)
+		self.connection.commit()
+
+	def clear_world(self) -> None:
+		"""
+		Purpose:
+			Clear the entire persisted world, including rooms and characters.
+
+		Inputs:
+			None.
+
+		Outputs:
+			None.
+		"""
+		self.connection.execute("DELETE FROM conversation_messages")
+		self.connection.execute("DELETE FROM conversations")
+		self.connection.execute("DELETE FROM memories")
+		self.connection.execute("DELETE FROM events")
+		self.connection.execute("DELETE FROM characters")
+		self.connection.execute("DELETE FROM rooms")
+		self.connection.commit()

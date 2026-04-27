@@ -2,18 +2,45 @@ import unittest
 import uuid
 from pathlib import Path
 from unittest.mock import patch
+
+from sim.core.orchestrator import OrchestratorResult
 from sim.core.simulation import Simulation
+from sim.services.llm_client import OllamaClientError
 
 TESTS_DIR = Path(__file__).resolve().parent
 
 class TestSimulation(unittest.TestCase):
     def setUp(self) -> None:
         self.db_path = TESTS_DIR / f"simulation_test_{uuid.uuid4().hex}.db"
-        self.sim = Simulation(db_path=str(self.db_path))
+        self.sim = Simulation(db_path=str(self.db_path), auto_seed_world=False)
 
     def tearDown(self) -> None:
+        # 1. Stop the simulation flag
+        self.sim.is_running = False
+
+        # 2. Wait for the background thread to finish if it exists
+        if hasattr(self.sim, '_step_thread') and self.sim._step_thread:
+            self.sim._step_thread.join(timeout=5)
+
+        # 3. Now it is safe to close the DB and delete the file
         self.sim.shutdown()
         self.db_path.unlink(missing_ok=True)
+
+    def test_auto_seed_populates_default_world(self):
+        self.sim.shutdown()
+        self.db_path.unlink(missing_ok=True)
+        seeded = Simulation(db_path=str(self.db_path))
+
+        try:
+            rooms = seeded.database.get_all_rooms()
+            characters = seeded.database.get_all_characters()
+            self.assertGreaterEqual(len(rooms), 2)
+            self.assertGreaterEqual(len(characters), 4)
+            self.assertTrue(
+                any("curious" in str(character["personality"]).lower() for character in characters)
+            )
+        finally:
+            seeded.shutdown()
 
     @patch('builtins.input', side_effect=['Alice', 'A curious explorer', 'Adventurous and friendly'])
     def test_create_character_success(self, mock_input):
@@ -54,6 +81,157 @@ class TestSimulation(unittest.TestCase):
         printed_calls = [call.args[0] for call in mock_print.call_args_list]
         success_message_found = any("Character 'Alice' created successfully!" in call for call in printed_calls)
         self.assertTrue(success_message_found, f"Success message not found in: {printed_calls}")
+
+    def test_reset_simulation_clears_history_but_keeps_world(self):
+        self.sim.database.create_room(10, "A shared room.", room_id="room_a")
+        self.sim.database.create_character(
+            name="Alice",
+            background="Observant.",
+            personality="Calm.",
+            current_room_id="room_a",
+            character_id="alice",
+        )
+        event_id = self.sim.database.create_event(1, "alice", "Alice looked around.", room_id="room_a")
+        self.sim.database.create_memory(
+            character_id="alice",
+            memory_type="short_term",
+            text="I looked around the room.",
+            source_event_id=event_id,
+            created_turn=1,
+        )
+        self.sim.event_log.append("Some event")
+        self.sim.tick_count = 3
+
+        self.sim.reset_simulation()
+
+        self.assertEqual(len(self.sim.database.get_all_rooms()), 1)
+        self.assertEqual(len(self.sim.database.get_all_characters()), 1)
+        self.assertEqual(self.sim.database.get_recent_events(), [])
+        self.assertEqual(self.sim.database.get_character_memories("alice"), [])
+        self.assertEqual(self.sim.tick_count, 0)
+        self.assertEqual(self.sim.event_log, [])
+
+    def test_reset_world_reseeds_default_world(self):
+        self.sim.database.create_room(10, "A shared room.", room_id="room_a")
+        self.sim.database.create_character(
+            name="Alice",
+            background="Observant.",
+            personality="Calm.",
+            current_room_id="room_a",
+            character_id="alice",
+        )
+
+        self.sim.reset_world()
+
+        rooms = self.sim.database.get_all_rooms()
+        characters = self.sim.database.get_all_characters()
+        self.assertGreaterEqual(len(rooms), 2)
+        self.assertGreaterEqual(len(characters), 4)
+        self.assertFalse(self.sim.get_scene_state()["world_empty"])
+        self.assertFalse(any(r["id"] == "room_a" for r in rooms), "custom room should be gone")
+
+    def test_pause_takes_effect_after_one_character_step(self):
+        self.sim.database.create_room(10, "A shared room.", room_id="room_a")
+        self.sim.database.create_character(
+            name="Alice",
+            background="Observant.",
+            personality="Calm.",
+            current_room_id="room_a",
+            character_id="alice",
+        )
+
+        class FakeOrchestrator:
+            def __init__(self):
+                self.calls = 0
+
+            def run_character_turn(self):
+                self.calls += 1
+                return OrchestratorResult(turn_number=1, public_log_entries=["Alice took no action."])
+
+        self.sim.orchestrator = FakeOrchestrator()
+
+        with patch.object(self.sim, "get_model_startup_warning", return_value=None):
+            self.assertTrue(self.sim.start())
+            self.sim.pause()
+            self.sim.update(self.sim.tick_interval)
+            if self.sim._step_thread:
+                self.sim._step_thread.join(timeout=5)
+
+        self.assertEqual(self.sim.orchestrator.calls, 1)
+        self.assertTrue(self.sim.is_paused)
+
+    def test_update_does_not_catch_up_multiple_character_turns_after_delay(self):
+        self.sim.database.create_room(10, "A shared room.", room_id="room_a")
+        self.sim.database.create_character(
+            name="Alice",
+            background="Observant.",
+            personality="Calm.",
+            current_room_id="room_a",
+            character_id="alice",
+        )
+
+        class FakeOrchestrator:
+            def __init__(self):
+                self.calls = 0
+
+            def run_character_turn(self):
+                self.calls += 1
+                return OrchestratorResult(turn_number=self.calls, public_log_entries=[f"Turn {self.calls}"])
+
+        self.sim.orchestrator = FakeOrchestrator()
+
+        with patch.object(self.sim, "get_model_startup_warning", return_value=None):
+            self.assertTrue(self.sim.start())
+            self.sim.update(self.sim.tick_interval * 3)
+
+        self.assertEqual(self.sim.orchestrator.calls, 1)
+        self.assertEqual(self.sim.tick_count, 1)
+
+    def test_step_pauses_instead_of_crashing_on_ollama_parse_failure(self):
+        self.sim.database.create_room(10, "A shared room.", room_id="room_a")
+        self.sim.database.create_character(
+            name="Alice",
+            background="Observant.",
+            personality="Calm.",
+            current_room_id="room_a",
+            character_id="alice",
+        )
+
+        class FailingOrchestrator:
+            def run_character_turn(self):
+                raise OllamaClientError("Ollama returned non-JSON structured output.")
+
+        self.sim.orchestrator = FailingOrchestrator()
+        self.sim.is_running = True
+
+        self.sim.step()
+
+        self.assertFalse(self.sim.is_running)
+        self.assertTrue(self.sim.is_paused)
+        self.assertIn("could not be parsed", self.sim.event_log[-1])
+
+    def test_get_detailed_logs_does_not_raise_on_sqlite_rows(self):
+        self.sim.database.create_room(10, "A calm commons.", room_id="commons")
+        self.sim.database.create_character(
+            name="Alice",
+            background="Observant.",
+            personality="Calm.",
+            current_room_id="commons",
+            character_id="alice",
+        )
+        self.sim.database.create_event(1, "alice", "Alice looked around.", room_id="commons")
+
+        # This must not raise AttributeError: 'sqlite3.Row' has no attribute 'get'
+        result = self.sim.get_detailed_logs()
+
+        self.assertIn("entries", result)
+        self.assertIn("rooms", result)
+        rooms = result["rooms"]
+        self.assertEqual(len(rooms), 1)
+        self.assertEqual(rooms[0]["id"], "commons")
+        self.assertEqual(rooms[0]["description"], "A calm commons.")
+        self.assertIn("Alice", rooms[0]["occupants"])
+
 
 if __name__ == "__main__":
     unittest.main()

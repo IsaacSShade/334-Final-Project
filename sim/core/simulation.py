@@ -1,196 +1,171 @@
+import threading
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Optional
 
 from sim.core.database import Database
-from sim.services.llm_client import OllamaClient
+from sim.core.default_world import seed_default_world
+from sim.core.orchestrator import Orchestrator
+from sim.services.llm_client import OllamaClient, OllamaClientError
+
 
 @dataclass
 class Simulation:
 	"""
 	Purpose:
-		Store the current simulation state and control whether the simulation
-		is running, paused, or stopped.
-
-	Inputs:
-		None at construction time. The simulation starts empty and can be
-		populated later by UI flows such as character creation, room creation,
-		or save-file loading.
-
-	Outputs:
-		A Simulation object with empty rooms, empty characters, and default
-		runtime state.
+		Store the current simulation state and coordinate runtime control for the
+		turn-by-turn orchestrator.
 	"""
 
-	# Starts empty so the app can launch before the user creates anything.
 	rooms: list[dict] = field(default_factory=list)
 	characters: list[dict] = field(default_factory=list)
 	event_log: list[str] = field(default_factory=list)
 
-	# Runtime state.
 	tick_count: int = 0
 	is_running: bool = False
 	is_paused: bool = False
+	pause_requested: bool = False
 
-	# Internal timing values for ticking the simulation over time.
 	_time_accumulator: float = 0.0
 	tick_interval: float = 1.0
 	db_path: Optional[str] = None
+	auto_seed_world: bool = True
 	database: Database = field(init=False, repr=False)
 	llm_client: OllamaClient = field(init=False, repr=False)
+	orchestrator: Orchestrator = field(init=False, repr=False)
+	_model_startup_warning: Optional[str] = field(init=False, default=None, repr=False)
+	_step_thread: Optional[threading.Thread] = field(init=False, default=None, repr=False)
+	_step_lock: threading.Lock = field(init=False, default_factory=threading.Lock, repr=False)
 
 	def __post_init__(self) -> None:
 		"""
 		Purpose:
-			Initialize systems that should not be passed directly into the
-			dataclass constructor.
-
-		Inputs:
-			None.
-
-		Outputs:
-			None. Creates the database connection and ensures the schema exists.
+			Initialize persistent services and optionally seed a starter world.
 		"""
-
 		self.database = Database(self.db_path)
 		self.database.initialize()
-		self._initialize_default_world()
 		self.llm_client = OllamaClient.from_env()
+		self._model_startup_warning = self.llm_client.get_startup_warning()
 
-	def _initialize_default_world(self) -> None:
-		"""
-		Purpose:
-			Create default rooms (Lobby and Library) if the database is empty.
-		"""
-		cursor = self.database.connection.execute("SELECT id FROM rooms LIMIT 1")
-		if not cursor.fetchone():
-			self.database.create_room(
-				size=20,
-				description="A grand lobby with marble floors and a large chandelier.",
-				room_id="lobby"
-			)
-			self.database.create_room(
-				size=15,
-				description="A quiet library filled with dusty books and comfortable chairs.",
-				room_id="library"
-			)
-			self.database.connect_rooms("lobby", "library")
-			
-			self.add_room("lobby")
-			self.add_room("library")
+		if self.auto_seed_world and self._should_seed_default_world():
+			seed_default_world(self.database)
+
+		self.orchestrator = Orchestrator(self.database, self.llm_client)
+		self.load_from_db()
+		self.tick_count = self.database.get_latest_turn_number()
+		recent = self.database.get_recent_events(limit=50)
+		self.event_log = [str(r["log"]) for r in reversed(recent) if r["log"]]
+
+	def _should_seed_default_world(self) -> bool:
+		return not self.database.get_all_rooms() or not self.database.get_all_characters()
 
 	def get_model_startup_warning(self) -> Optional[str]:
 		"""
 		Purpose:
 			Expose any user-facing model availability warning at startup time.
-
-		Inputs:
-			None.
-
-		Outputs:
-			A warning string when the current Ollama configuration is not ready,
-			otherwise None.
 		"""
-		return self.llm_client.get_startup_warning()
+		return self._model_startup_warning
 
-	def start(self) -> None:
+	def start(self) -> bool:
 		"""
 		Purpose:
-			Start the simulation.
+			Start or resume simulation advancement when the world is ready.
 
 		Inputs:
 			None.
 
 		Outputs:
-			None. Updates internal state so the simulation begins advancing
-			when update() is called.
+			True if advancement can proceed, otherwise False.
 		"""
+		self._model_startup_warning = self.llm_client.get_startup_warning()
+		if self.get_model_startup_warning() is not None:
+			return False
+
+		self.load_from_db()
+		if not self.rooms or not self.characters:
+			return False
 
 		self.is_running = True
 		self.is_paused = False
+		self.pause_requested = False
+		return True
 
 	def pause(self) -> None:
 		"""
 		Purpose:
-			Pause the simulation without clearing its current state.
-
-		Inputs:
-			None.
-
-		Outputs:
-			None. If the simulation is currently running, it becomes paused.
+			Request a pause after the current character turn finishes.
 		"""
-
 		if self.is_running:
-			self.is_paused = True
+			self.pause_requested = True
 
 	def resume(self) -> None:
 		"""
 		Purpose:
 			Resume the simulation after a pause.
-
-		Inputs:
-			None.
-
-		Outputs:
-			None. If the simulation is currently running, it becomes unpaused.
 		"""
-
-		if self.is_running:
-			self.is_paused = False
+		self.start()
 
 	def stop(self) -> None:
 		"""
 		Purpose:
-			Stop the simulation clock without deleting rooms, characters,
-			or prior log history.
-
-		Inputs:
-			None.
-
-		Outputs:
-			None. Runtime flags are reset so update() no longer advances time.
+			Stop turn advancement without clearing any persistent state.
 		"""
-
 		self.is_running = False
 		self.is_paused = False
+		self.pause_requested = False
 		self._time_accumulator = 0.0
 
 	def clear(self) -> None:
 		"""
 		Purpose:
-			Fully clear the simulation back to an empty state.
-
-		Inputs:
-			None.
-
-		Outputs:
-			None. Removes all rooms, characters, log entries, and resets
-			runtime counters.
+			Fully clear in-memory state.
 		"""
-
 		self.rooms.clear()
 		self.characters.clear()
 		self.event_log.clear()
 		self.tick_count = 0
 		self.is_running = False
 		self.is_paused = False
+		self.pause_requested = False
 		self._time_accumulator = 0.0
+
+	def reset_simulation(self) -> None:
+		"""
+		Purpose:
+			Clear derived turn history while preserving the current rooms and
+			characters exactly as they are.
+		"""
+		self.database.clear_history()
+		self.orchestrator.reset_runtime()
+		self.event_log.clear()
+		self.tick_count = 0
+		self.is_running = False
+		self.is_paused = False
+		self.pause_requested = False
+		self._time_accumulator = 0.0
+		self.load_from_db()
+
+	def reset_world(self) -> None:
+		"""
+		Purpose:
+			Wipe the full persisted world and re-seed it with the default rooms and
+			characters so the simulation is ready to run again immediately.
+		"""
+		self.database.clear_world()
+		self.database.clear_history()
+		seed_default_world(self.database)
+		self.orchestrator.reset_runtime()
+		self.clear()
+		self.load_from_db()
 
 	def add_room(self, room_data: dict | str) -> None:
 		"""
 		Purpose:
-			Add a room to the simulation if it does not already exist.
-
-		Inputs:
-			room_data: A dictionary representing one room, or a string room ID.
-
-		Outputs:
-			None. Appends the room if it is valid and not already present.
+			Add a room to the in-memory world snapshot if it does not already exist.
+			Accepts either a room dict or a string room ID (looked up from DB).
 		"""
-
 		if not room_data:
 			return
-			
+
 		if isinstance(room_data, str):
 			room_row = self.database.get_room(room_data)
 			room_data = dict(room_row) if room_row else {"id": room_data, "size": 10, "description": "A room."}
@@ -202,46 +177,29 @@ class Simulation:
 	def add_character(self, character: dict) -> None:
 		"""
 		Purpose:
-			Add a character to the simulation.
-
-		Inputs:
-			character: A dictionary representing one character. For now this is
-				kept loose so we can evolve the structure.
-
-		Outputs:
-			None. Adds the character to the simulation if a value was provided.
+			Add a character to the in-memory world snapshot.
 		"""
-
 		if character:
 			self.characters.append(character)
 
 	def load_state(self, rooms: list[dict], characters: list[dict]) -> None:
 		"""
 		Purpose:
-			Replace the current simulation content with externally provided data.
-			This is the future hook for loading from a save file or character
-			creator flow.
-
-		Inputs:
-			rooms: A list of room dictionaries.
-			characters: A list of character dictionaries.
-
-		Outputs:
-			None. Replaces current rooms and characters with the provided data.
+			Replace the current in-memory state with externally provided data.
 		"""
-
 		self.rooms = list(rooms)
 		self.characters = list(characters)
 		self.event_log.clear()
 		self.tick_count = 0
 		self.is_running = False
 		self.is_paused = False
+		self.pause_requested = False
 		self._time_accumulator = 0.0
 
 	def save_to_db(self) -> None:
 		"""
 		Purpose:
-			Serialize and save the current simulation state to the database.
+			Serialize and save the current in-memory simulation state.
 		"""
 		for room in self.rooms:
 			room_id = room.get("id", "default_room")
@@ -255,12 +213,20 @@ class Simulation:
 			background = char.get("background", "No background")
 			personality = char.get("personality", "No personality")
 			room_id = char.get("current_room_id")
-			self.database.upsert_character(char_id, name, background, personality, room_id)
+			last_completed_turn = int(char.get("last_completed_turn", 0) or 0)
+			self.database.upsert_character(
+				char_id,
+				name,
+				background,
+				personality,
+				room_id,
+				last_completed_turn=last_completed_turn,
+			)
 
 	def load_from_db(self) -> None:
 		"""
 		Purpose:
-			Load the simulation state from the database.
+			Load the current room and character state from the database.
 		"""
 		db_rooms = self.database.get_all_rooms()
 		db_characters = self.database.get_all_characters()
@@ -268,106 +234,149 @@ class Simulation:
 		self.rooms = [dict(r) for r in db_rooms]
 		self.characters = [dict(c) for c in db_characters]
 
+	def get_scene_state(self) -> dict[str, Any]:
+		"""
+		Purpose:
+			Expose a renderer-friendly snapshot of the current world state.
+		"""
+		self.load_from_db()
+		warning = self.get_model_startup_warning()
+		status = "running" if self.is_running and not self.is_paused else "paused" if self.is_paused else "idle"
+		can_start = warning is None and bool(self.rooms) and bool(self.characters)
+
+		connections = [
+			{"room_id_1": str(r["room_id_1"]), "room_id_2": str(r["room_id_2"])}
+			for r in self.database.get_all_connections()
+		]
+
+		return {
+			"turn_number": self.tick_count,
+			"rooms": list(self.rooms),
+			"characters": list(self.characters),
+			"connections": connections,
+			"event_log": list(self.event_log),
+			"is_running": self.is_running,
+			"is_paused": self.is_paused,
+			"pause_requested": self.pause_requested,
+			"status": status,
+			"startup_warning": warning,
+			"can_start": can_start,
+			"world_empty": not self.rooms or not self.characters,
+		}
+
 	def update(self, dt: float) -> None:
 		"""
 		Purpose:
 			Advance internal simulation time based on frame delta time.
-
-		Inputs:
-			dt: Elapsed time in seconds since the last frame.
-
-		Outputs:
-			None. Calls step() whenever enough time has accumulated for one
-			simulation tick.
 		"""
-
 		if not self.is_running or self.is_paused:
+			return
+
+		if self._step_thread is not None and self._step_thread.is_alive():
 			return
 
 		self._time_accumulator += dt
 
-		while self._time_accumulator >= self.tick_interval:
+		if self._time_accumulator < self.tick_interval:
+			return
+
+		self._time_accumulator = 0.0
+		self._step_thread = threading.Thread(target=self._run_step_locked, daemon=True)
+		self._step_thread.start()
+
+	def _run_step_locked(self) -> None:
+		with self._step_lock:
 			self.step()
-			self._time_accumulator -= self.tick_interval
 
 	def step(self) -> None:
 		"""
 		Purpose:
-			Advance the simulation by one tick.
+			Advance the simulation by exactly one character turn.
+		"""
+		try:
+			result = self.orchestrator.run_character_turn()
+		except OllamaClientError as exc:
+			self.is_running = False
+			self.is_paused = True
+			self.pause_requested = False
+			self.event_log.append(f"Simulation paused because the Ollama response could not be parsed: {exc}")
+			self.event_log = self.event_log[-50:]
+			self._model_startup_warning = str(exc)
+			return
+
+		self.tick_count = result.turn_number
+		self.event_log.extend(result.public_log_entries)
+		self.event_log = self.event_log[-50:]
+		self.load_from_db()
+
+		if self.pause_requested:
+			self.is_paused = True
+			self.pause_requested = False
+
+	def get_detailed_logs(self, limit: int = 50) -> dict:
+		"""
+		Purpose:
+			Return a renderer-friendly payload with rich event entries and room snapshots.
 
 		Inputs:
-			None.
+			limit: Maximum number of events to return.
 
 		Outputs:
-			None. Increments the tick counter and records a simple event log
-			entry. Later this is where orchestrator / agent logic will go.
+			A dict with 'entries' (list of rich event dicts) and 'rooms' (list of room snapshots).
 		"""
-
-		self.tick_count += 1
-		self.event_log.append(f"Tick {self.tick_count}: simulation advanced.")
-
-		# Prevent the log from growing forever during early prototyping.
-		if len(self.event_log) > 50:
-			self.event_log.pop(0)
+		return {
+			"entries": self.database.get_recent_events_rich(limit),
+			"rooms": [
+				{
+					"id": str(r["id"]),
+					"description": str(r["description"] or ""),
+					"occupants": [
+						str(c["name"] or "?")
+						for c in self.database.get_characters_in_room(str(r["id"]))
+					],
+				}
+				for r in self.database.get_all_rooms()
+			],
+		}
 
 	def shutdown(self) -> None:
 		"""
 		Purpose:
 			Clean up long-lived resources before the application exits.
-
-		Inputs:
-			None.
-
-		Outputs:
-			None. Closes the database connection.
 		"""
-
 		self.database.close()
-
 
 	def create_character(self) -> dict:
 		"""
 		Purpose:
 			Interactively create a new character through console prompts.
-
-		Inputs:
-			None. Prompts user for input.
-
-		Outputs:
-			The created character dictionary that was added to the simulation.
 		"""
 		print("\n=== Character Creator ===")
-		
-		# Get character name
+
 		while True:
 			name = input("Enter character name: ").strip()
 			if name:
 				break
 			print("Name cannot be empty. Please try again.")
-		
-		# Get background
+
 		while True:
 			background = input("Enter character background: ").strip()
 			if background:
 				break
 			print("Background cannot be empty. Please try again.")
-		
-		# Get personality
+
 		while True:
 			personality = input("Enter character personality: ").strip()
 			if personality:
 				break
 			print("Personality cannot be empty. Please try again.")
-		
-		# Create character dict
+
 		character = {
 			"name": name,
 			"background": background,
-			"personality": personality
+			"personality": personality,
 		}
-		
-		# Add to simulation
 		self.add_character(character)
-		
+
 		print(f"\nCharacter '{name}' created successfully!")
 		return character

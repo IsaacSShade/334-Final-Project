@@ -109,30 +109,56 @@ class TestDatabase(unittest.TestCase):
 			database.close()
 			db_path.unlink(missing_ok=True)
 
-	def test_default_room_creation_and_connections(self) -> None:
+	def test_room_events_since_turn_and_completed_turn_updates(self) -> None:
 		"""
 		Purpose:
-			Verify that default rooms can be connected and default agents start in the lobby.
+			Verify room backlog reads and completed-turn writes behave as expected.
+		"""
+		db_path = TESTS_DIR / f"test_sim_turns_{uuid.uuid4().hex}.db"
+		database = Database(str(db_path))
+
+		try:
+			database.initialize()
+			room_id = database.create_room(8, "A focused test room.", room_id="room_a")
+			character_id = database.create_character(
+				name="Alice",
+				background="Keeps notes.",
+				personality="Precise.",
+				current_room_id=room_id,
+				character_id="alice",
+			)
+			database.create_event(1, character_id, "Turn one event.", room_id=room_id)
+			database.create_event(2, character_id, "Turn two event.", room_id=room_id)
+
+			rows = database.get_room_events_since_turn(room_id, after_turn=1)
+			self.assertEqual(len(rows), 1)
+			self.assertEqual(rows[0]["log"], "Turn two event.")
+
+			database.update_character_last_completed_turn(character_id, 2)
+			character = database.get_character(character_id)
+			self.assertEqual(character["last_completed_turn"], 2)
+		finally:
+			database.close()
+			db_path.unlink(missing_ok=True)
+
+	def test_room_connections_are_bidirectional(self) -> None:
+		"""
+		Purpose:
+			Verify connect_rooms creates a two-way connection and get_connected_rooms returns them.
 		"""
 		with tempfile.TemporaryDirectory() as temp_dir:
-			db_path = Path(temp_dir) / "test_default_rooms.db"
+			db_path = Path(temp_dir) / "test_connections.db"
 			database = Database(str(db_path))
 			database.initialize()
 
-			# Create default rooms and connect them manually as Simulation would
 			database.create_room(size=20, description="Lobby", room_id="lobby")
 			database.create_room(size=15, description="Library", room_id="library")
 			database.connect_rooms("lobby", "library")
 
-			# Verify two-way connection
-			cursor = database.connection.execute("SELECT room_id_2 FROM room_connections WHERE room_id_1 = 'lobby'")
-			connected_rooms = [row["room_id_2"] for row in cursor.fetchall()]
-			self.assertIn("library", connected_rooms)
-
-			# Verify default agent room assignment
-			char_id = database.create_character(name="Agent Smith", background="A test agent.", personality="Stoic.")
-			cursor = database.connection.execute("SELECT current_room_id FROM characters WHERE id = ?", (char_id,))
-			self.assertEqual(cursor.fetchone()["current_room_id"], "lobby")
+			from_lobby = [r["id"] for r in database.get_connected_rooms("lobby")]
+			from_library = [r["id"] for r in database.get_connected_rooms("library")]
+			self.assertIn("library", from_lobby)
+			self.assertIn("lobby", from_library)
 
 			database.close()
 

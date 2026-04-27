@@ -1,0 +1,47 @@
+## Summary
+
+- Add the missing orchestrator layer so the simulation advances one character turn at a time
+- Add safe runtime controls and reset behavior in the UI
+- Add a visual room-grid world view with animated character tokens
+- Add a small default seeded world so the simulation is demoable before a room/character creator exists
+
+Closes #8
+
+## Description
+
+This PR turns the existing action layer into a working simulation loop.
+
+The main design decision was to make **one simulation tick equal one character turn**, not one full world turn. That keeps the pause behavior correct: clicking `Pause` lets the current character finish, then stops before the next character begins. The orchestrator keeps track of where it is inside the larger world turn, including the current ordered character list and current character index.
+
+The character order is deterministic and alphabetical by name. That keeps behavior stable across runs and makes tests easier to reason about. Within one character turn, the orchestrator does **sequential replanning** instead of asking the model for a full action bundle up front. After each completed action, it reloads the latest world state, rebuilds context, and asks for the next action again. Each action type can only be used once per character turn, but the order is dynamic. That allows flows like talking to someone, then moving, then changing the new room.
+
+The existing movement, conversation, and room-update services were kept as the execution layer. The new orchestrator only coordinates turn order, context building, backlog delivery, and when each action is called. Prompt logic stays in the agent files, and SQL stays in `Database`.
+
+The room backlog logic is intentionally simple and deterministic. Each character now has a `last_completed_turn` value in the database. At the start of a character turn, and again immediately after moving into a new room, the orchestrator loads only room-local events with `turn_number > last_completed_turn`. That means characters see what happened since their last turn, but they do not receive stale room history from older turns. Backlog delivery is also deduplicated within the active character turn so the same event is not replayed twice during replanning.
+
+Reset behavior is split into two clear scopes:
+
+- `Reset Simulation` clears derived history only: events, conversations, conversation messages, memories, and completed-turn markers
+- `Reset World` clears everything, including rooms and characters
+
+`Reset Simulation` preserves the current room descriptions, room occupancy, and character personalities/backgrounds exactly as they are. `Reset World` goes back to nothing.
+
+Because there is not yet a creator flow before the simulation screen, this branch adds a very small default world seeder. It is isolated in its own module so it is easy to remove later when the real room/character creation flow exists. The app seeds only on startup when the runtime database is empty. The reset-world button does not reseed automatically; it leaves the world empty.
+
+The UI now renders the world directly from a simulation snapshot instead of talking to action modules or the database ad hoc. Rooms are shown as bordered rectangles in a responsive grid. Characters are shown as stable-color tokens with the first letter of their name centered inside. Token layout inside each room is also a dynamic grid, and room changes animate as a short straight-line movement between rooms. The top HUD now includes `Start`, `Pause`, `Reset Simulation`, and `Reset World`.
+
+`Start` doubles as resume. If Ollama is unavailable, the warning is shown in the HUD and start is blocked instead of falling back to heuristic planning. That keeps planning behavior explicit and avoids hidden local logic diverging from the model-backed simulation path.
+
+## Testing
+
+Automated testing run from the project root:
+
+- `python -m unittest discover -s tests -v`
+
+Coverage added/verified:
+
+- existing action tests still pass
+- new orchestrator tests for alphabetical order, sequential replanning, and post-move backlog delivery
+- new backlog tests for turn-floor cutoff and duplicate suppression
+- new simulation tests for seeding, pause-at-character-boundary behavior, `Reset Simulation`, and `Reset World`
+- new UI helper tests for room grid layout, token layout, stable token colors, and movement animation state
