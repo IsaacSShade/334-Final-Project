@@ -15,6 +15,14 @@ class TestSimulation(unittest.TestCase):
         self.sim = Simulation(db_path=str(self.db_path), auto_seed_world=False)
 
     def tearDown(self) -> None:
+        # 1. Stop the simulation flag
+        self.sim.is_running = False
+
+        # 2. Wait for the background thread to finish if it exists
+        if hasattr(self.sim, '_step_thread') and self.sim._step_thread:
+            self.sim._step_thread.join(timeout=5)
+
+        # 3. Now it is safe to close the DB and delete the file
         self.sim.shutdown()
         self.db_path.unlink(missing_ok=True)
 
