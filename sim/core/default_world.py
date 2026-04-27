@@ -38,7 +38,7 @@ DEFAULT_CHARACTERS: tuple[dict[str, object], ...] = (
 		"id": "blake",
 		"name": "Blake",
 		"background": "Blake is a curious neighbor who enjoys conversation and wandering.",
-		"personality": "Friendly, impulsive, and social.",
+		"personality": "Friendly, impulsive, curious, and eager to explore new places.",
 		"current_room_id": "kitchen",
 	},
 	{
@@ -52,7 +52,7 @@ DEFAULT_CHARACTERS: tuple[dict[str, object], ...] = (
 		"id": "drew",
 		"name": "Drew",
 		"background": "Drew prefers calm spaces and often checks in on what others are doing.",
-		"personality": "Patient, steady, and quietly curious.",
+		"personality": "Patient, steady, and prefers staying where things feel calm.",
 		"current_room_id": "garden",
 	},
 )

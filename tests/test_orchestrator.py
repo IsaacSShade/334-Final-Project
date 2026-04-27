@@ -56,8 +56,8 @@ class TestOrchestrator(unittest.TestCase):
 
 		client = FakeLLMClient(
 			[
-				{"next_action": "none", "end_turn": True, "move_target_room_id": None, "conversation_target_character_id": None, "room_update_intent": None},
-				{"next_action": "none", "end_turn": True, "move_target_room_id": None, "conversation_target_character_id": None, "room_update_intent": None},
+				{"next_action": "none", "move_target_room_id": None, "conversation_target_character_id": None, "room_update_intent": None},
+				{"next_action": "none", "move_target_room_id": None, "conversation_target_character_id": None, "room_update_intent": None},
 			]
 		)
 		orchestrator = Orchestrator(self.database, client)
@@ -90,14 +90,14 @@ class TestOrchestrator(unittest.TestCase):
 
 		client = FakeLLMClient(
 			[
-				{"next_action": "conversation", "end_turn": False, "move_target_room_id": None, "conversation_target_character_id": "blake", "room_update_intent": None},
+				{"next_action": "conversation", "move_target_room_id": None, "conversation_target_character_id": "blake", "room_update_intent": None},
 				{"utterance": "Hi Blake, how is the day going?", "should_end": False, "end_reason": None},
 				{"utterance": "Pretty well. I should get back to work soon.", "should_end": True, "end_reason": "natural_close"},
-				{"next_action": "move", "end_turn": False, "move_target_room_id": "studio", "conversation_target_character_id": None, "room_update_intent": None},
-				{"next_action": "room_update", "end_turn": False, "move_target_room_id": None, "conversation_target_character_id": None, "room_update_intent": "Straighten the studio and make it look more focused."},
+				{"next_action": "move", "move_target_room_id": "studio", "conversation_target_character_id": None, "room_update_intent": None},
+				{"next_action": "room_update", "move_target_room_id": None, "conversation_target_character_id": None, "room_update_intent": "Straighten the studio and make it look more focused."},
 				{"new_description": "A tidy studio with neatly stacked papers and a cleared central desk.", "change_summary": "Ava straightened the studio.", "change_tags": ["tidy", "focused"]},
-				{"next_action": "none", "end_turn": True, "move_target_room_id": None, "conversation_target_character_id": None, "room_update_intent": None},
-				{"next_action": "none", "end_turn": True, "move_target_room_id": None, "conversation_target_character_id": None, "room_update_intent": None},
+				{"next_action": "none", "move_target_room_id": None, "conversation_target_character_id": None, "room_update_intent": None},
+				{"next_action": "none", "move_target_room_id": None, "conversation_target_character_id": None, "room_update_intent": None},
 			]
 		)
 		orchestrator = Orchestrator(self.database, client)
@@ -138,9 +138,9 @@ class TestOrchestrator(unittest.TestCase):
 
 		client = FakeLLMClient(
 			[
-				{"next_action": "move", "end_turn": False, "move_target_room_id": "studio", "conversation_target_character_id": None, "room_update_intent": None},
-				{"next_action": "none", "end_turn": True, "move_target_room_id": None, "conversation_target_character_id": None, "room_update_intent": None},
-				{"next_action": "none", "end_turn": True, "move_target_room_id": None, "conversation_target_character_id": None, "room_update_intent": None},
+				{"next_action": "move", "move_target_room_id": "studio", "conversation_target_character_id": None, "room_update_intent": None},
+				{"next_action": "none", "move_target_room_id": None, "conversation_target_character_id": None, "room_update_intent": None},
+				{"next_action": "none", "move_target_room_id": None, "conversation_target_character_id": None, "room_update_intent": None},
 			]
 		)
 		orchestrator = Orchestrator(self.database, client)

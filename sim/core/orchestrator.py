@@ -1,7 +1,15 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from typing import Any
+
+_DEV = os.environ.get("SIM_DEV_MODE", "0").strip() == "1"
+
+
+def _dev(msg: str) -> None:
+    if _DEV:
+        print(f"[DEV][orchestrator] {msg}")
 
 from sim.actions.conversation import ConversationAction
 from sim.actions.movement import MovementAction
@@ -88,7 +96,10 @@ class Orchestrator:
 			self._start_next_world_turn(characters)
 
 		character_id = self._active_character_ids[self._active_character_index]
-		result = self._run_one_actor(character_id, [dict(row) for row in rooms])
+		result = self._run_one_actor(
+			character_id,
+			self._build_available_rooms([dict(row) for row in rooms]),
+		)
 		self._active_character_index += 1
 
 		if self._active_character_index >= len(self._active_character_ids):
@@ -127,6 +138,7 @@ class Orchestrator:
 		used_actions: set[str] = set()
 		public_entries: list[str] = []
 
+		_dev(f"--- actor turn: {character.get('name')} (id={character_id}) turn={self.current_turn_number} ---")
 		while len(used_actions) < 3:
 			character_row = self.database.get_character(character_id)
 			if character_row is None:
@@ -135,6 +147,7 @@ class Orchestrator:
 			character = dict(character_row)
 			room_id = character.get("current_room_id")
 			if not room_id:
+				_dev(f"  no room_id for {character.get('name')} — breaking")
 				public_entries.append(
 					f"{character.get('name', 'A character')} could not act because they are not in a room."
 				)
@@ -142,27 +155,34 @@ class Orchestrator:
 
 			room_row = self.database.get_room(str(room_id))
 			if room_row is None:
+				_dev(f"  room '{room_id}' missing — breaking")
 				public_entries.append(
 					f"{character.get('name', 'A character')} could not act because room '{room_id}' is missing."
 				)
 				break
 
 			context = self._build_context(character, dict(room_row))
+			_dev(f"  calling planner (used_actions={used_actions})")
 			plan = self.turn_planner.choose_next_action(context, available_rooms, used_actions)
-			if plan.end_turn or plan.next_action == "none":
+			_dev(f"  planner returned: action={plan.next_action!r}")
+			if plan.next_action == "none":
+				_dev("  next_action=none — breaking")
 				break
 
 			if plan.next_action in used_actions:
+				_dev(f"  repeated action {plan.next_action!r} — breaking")
 				public_entries.append(
 					f"{character.get('name', 'A character')} ended their turn after repeating an action choice."
 				)
 				break
 
 			action_result = self._execute_plan(plan, context, available_rooms)
+			_dev(f"  action result: success={action_result.success} type={action_result.action_type!r} summary={action_result.summary!r}")
 			if action_result.summary:
 				public_entries.append(action_result.summary)
 
 			if not action_result.success:
+				_dev("  action failed — breaking")
 				break
 
 			used_actions.add(action_result.action_type)
@@ -175,6 +195,18 @@ class Orchestrator:
 			turn_number=self.current_turn_number,
 			public_log_entries=public_entries,
 		)
+
+	def _build_available_rooms(
+		self,
+		rooms: list[dict[str, Any]],
+	) -> list[dict[str, Any]]:
+		available_rooms: list[dict[str, Any]] = []
+		for room in rooms:
+			room_id = str(room["id"])
+			room_copy = dict(room)
+			room_copy["occupant_count"] = len(self.database.get_characters_in_room(room_id))
+			available_rooms.append(room_copy)
+		return available_rooms
 
 	def _build_context(
 		self,

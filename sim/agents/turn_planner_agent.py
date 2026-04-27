@@ -1,9 +1,17 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Any
 
 from sim.actions.schemas import ActionContext
+
+_DEV = os.environ.get("SIM_DEV_MODE", "0").strip() == "1"
+
+
+def _dev(msg: str) -> None:
+    if _DEV:
+        print(f"[DEV][turn_planner] {msg}")
 
 
 @dataclass(slots=True)
@@ -14,7 +22,6 @@ class TurnActionPlan:
 	"""
 
 	next_action: str
-	end_turn: bool
 	move_target_room_id: str | None = None
 	conversation_target_character_id: str | None = None
 	room_update_intent: str | None = None
@@ -51,9 +58,24 @@ class TurnPlannerAgent:
 		reply = self.llm_client.generate_structured_chat(
 			system_prompt=(
 				"You are deciding the next single action for a character in a "
-				"turn-based simulation. Return JSON only. Pick at most one unused "
-				"action from move, conversation, room_update, or none. If the turn "
-				"should stop now, set end_turn to true."
+				"turn-based simulation. Pick one action from: "
+				"move, conversation, room_update, or none. "
+				"none means the character waits and observes while others act. "
+				"Personality should strongly influence the choice. Curious, restless, "
+				"or social characters should move or interact rather than waiting. "
+				"Only choose none when waiting genuinely fits the personality. "
+				"You MUST respond with ONLY a JSON object using exactly these four "
+				"fields — do not rename them, do not add extra fields:\n"
+				"  next_action: one of \"move\", \"conversation\", \"room_update\", \"none\"\n"
+				"  move_target_room_id: the room id string to move to, or null\n"
+				"  conversation_target_character_id: the character id string to talk to, or null\n"
+				"  room_update_intent: a short string describing the room change, or null\n"
+				"Example for a move: "
+				"{\"next_action\":\"move\",\"move_target_room_id\":\"kitchen\","
+				"\"conversation_target_character_id\":null,\"room_update_intent\":null}\n"
+				"Example for waiting: "
+				"{\"next_action\":\"none\",\"move_target_room_id\":null,"
+				"\"conversation_target_character_id\":null,\"room_update_intent\":null}"
 			),
 			messages=[
 				{
@@ -68,14 +90,12 @@ class TurnPlannerAgent:
 						"type": "string",
 						"enum": ["move", "conversation", "room_update", "none"],
 					},
-					"end_turn": {"type": "boolean"},
 					"move_target_room_id": {"type": ["string", "null"]},
 					"conversation_target_character_id": {"type": ["string", "null"]},
 					"room_update_intent": {"type": ["string", "null"]},
 				},
 				"required": [
 					"next_action",
-					"end_turn",
 					"move_target_room_id",
 					"conversation_target_character_id",
 					"room_update_intent",
@@ -83,15 +103,21 @@ class TurnPlannerAgent:
 			},
 		)
 
-		return TurnActionPlan(
+		plan = TurnActionPlan(
 			next_action=str(reply.get("next_action", "none")).strip() or "none",
-			end_turn=bool(reply.get("end_turn", False)),
 			move_target_room_id=self._normalize_optional_text(reply.get("move_target_room_id")),
 			conversation_target_character_id=self._normalize_optional_text(
 				reply.get("conversation_target_character_id")
 			),
 			room_update_intent=self._normalize_optional_text(reply.get("room_update_intent")),
 		)
+		_dev(
+			f"plan => action={plan.next_action!r} "
+			f"move_target={plan.move_target_room_id!r} "
+			f"convo_target={plan.conversation_target_character_id!r} "
+			f"room_intent={plan.room_update_intent!r}"
+		)
+		return plan
 
 	def _build_prompt(
 		self,
@@ -112,19 +138,27 @@ class TurnPlannerAgent:
 			f"Current room id: {current_room.get('id')}",
 			f"Current room description: {current_room.get('description', 'A room.')}",
 			f"Actions already used this turn: {', '.join(sorted(used_actions)) or 'none'}",
-			"Characters in the current room:",
+			"Other characters in the current room:",
+		]
+		other_occupants = [
+			occupant
+			for occupant in context.characters_in_current_room
+			if str(occupant.get("id")) != str(character.get("id"))
 		]
 
-		if context.characters_in_current_room:
-			for occupant in context.characters_in_current_room:
+		if other_occupants:
+			for occupant in other_occupants:
 				lines.append(f"- {occupant.get('id')}: {occupant.get('name', 'Unknown')}")
 		else:
-			lines.append("- Nobody is here.")
+			lines.append("- Nobody else is here.")
 
 		lines.append("Available rooms:")
 		for room in available_rooms:
+			room_id = str(room.get("id"))
+			occupant_count = self._room_occupant_count(available_rooms, context, room_id)
 			lines.append(
-				f"- {room.get('id')}: {room.get('description', 'A room.')}"
+				f"- {room_id}: {room.get('description', 'A room.')} "
+				f"(occupants here now: {occupant_count})"
 			)
 
 		if context.room_event_backlog:
@@ -132,8 +166,10 @@ class TurnPlannerAgent:
 			lines.extend(f"- {entry}" for entry in context.room_event_backlog)
 
 		lines.append(
-			"Choose the single best next action. If there is nothing useful to do, "
-			"choose none and end the turn."
+			"Choose the single best next action now. The character may act multiple "
+			"times per turn — choose none only when waiting genuinely fits them.\n"
+			"Respond with JSON using exactly these fields: next_action, "
+			"move_target_room_id, conversation_target_character_id, room_update_intent."
 		)
 		return "\n".join(lines)
 
@@ -144,3 +180,26 @@ class TurnPlannerAgent:
 		if not text:
 			return None
 		return text
+
+	def _room_occupant_count(
+		self,
+		available_rooms: list[dict[str, Any]],
+		context: ActionContext,
+		room_id: str,
+	) -> int:
+		count = 0
+		if room_id == str(context.current_room.get("id")):
+			return len(
+				[
+					occupant
+					for occupant in context.characters_in_current_room
+					if str(occupant.get("id")) != str(context.character.get("id"))
+				]
+			)
+
+		for room in available_rooms:
+			if str(room.get("id")) == room_id:
+				raw_count = room.get("occupant_count")
+				if isinstance(raw_count, int):
+					return raw_count
+		return count

@@ -39,7 +39,7 @@ class ConversationActionRequest:
 
 	context: ActionContext
 	target_character_id: str
-	max_exchanges: int = 50
+	max_exchanges: int = 8
 
 
 @dataclass(slots=True)

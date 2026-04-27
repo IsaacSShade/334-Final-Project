@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 from sim.core.orchestrator import OrchestratorResult
 from sim.core.simulation import Simulation
+from sim.services.llm_client import OllamaClientError
 
 TESTS_DIR = Path(__file__).resolve().parent
 
@@ -23,8 +24,15 @@ class TestSimulation(unittest.TestCase):
         seeded = Simulation(db_path=str(self.db_path))
 
         try:
-            self.assertGreaterEqual(len(seeded.database.get_all_rooms()), 4)
-            self.assertGreaterEqual(len(seeded.database.get_all_characters()), 4)
+            rooms = seeded.database.get_all_rooms()
+            characters = seeded.database.get_all_characters()
+            self.assertGreaterEqual(len(rooms), 4)
+            self.assertGreaterEqual(len(characters), 4)
+            occupancy = {character["current_room_id"] for character in characters}
+            self.assertEqual(len(occupancy), len(characters))
+            self.assertTrue(
+                any("curious" in str(character["personality"]).lower() for character in characters)
+            )
         finally:
             seeded.shutdown()
 
@@ -140,6 +148,56 @@ class TestSimulation(unittest.TestCase):
 
         self.assertEqual(self.sim.orchestrator.calls, 1)
         self.assertTrue(self.sim.is_paused)
+
+    def test_update_does_not_catch_up_multiple_character_turns_after_delay(self):
+        self.sim.database.create_room(10, "A shared room.", room_id="room_a")
+        self.sim.database.create_character(
+            name="Alice",
+            background="Observant.",
+            personality="Calm.",
+            current_room_id="room_a",
+            character_id="alice",
+        )
+
+        class FakeOrchestrator:
+            def __init__(self):
+                self.calls = 0
+
+            def run_character_turn(self):
+                self.calls += 1
+                return OrchestratorResult(turn_number=self.calls, public_log_entries=[f"Turn {self.calls}"])
+
+        self.sim.orchestrator = FakeOrchestrator()
+
+        with patch.object(self.sim, "get_model_startup_warning", return_value=None):
+            self.assertTrue(self.sim.start())
+            self.sim.update(self.sim.tick_interval * 3)
+
+        self.assertEqual(self.sim.orchestrator.calls, 1)
+        self.assertEqual(self.sim.tick_count, 1)
+
+    def test_step_pauses_instead_of_crashing_on_ollama_parse_failure(self):
+        self.sim.database.create_room(10, "A shared room.", room_id="room_a")
+        self.sim.database.create_character(
+            name="Alice",
+            background="Observant.",
+            personality="Calm.",
+            current_room_id="room_a",
+            character_id="alice",
+        )
+
+        class FailingOrchestrator:
+            def run_character_turn(self):
+                raise OllamaClientError("Ollama returned non-JSON structured output.")
+
+        self.sim.orchestrator = FailingOrchestrator()
+        self.sim.is_running = True
+
+        self.sim.step()
+
+        self.assertFalse(self.sim.is_running)
+        self.assertTrue(self.sim.is_paused)
+        self.assertIn("could not be parsed", self.sim.event_log[-1])
 
 if __name__ == "__main__":
     unittest.main()

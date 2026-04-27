@@ -1,10 +1,11 @@
+import threading
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from sim.core.database import Database
 from sim.core.default_world import seed_default_world
 from sim.core.orchestrator import Orchestrator
-from sim.services.llm_client import OllamaClient
+from sim.services.llm_client import OllamaClient, OllamaClientError
 
 
 @dataclass
@@ -32,6 +33,8 @@ class Simulation:
 	llm_client: OllamaClient = field(init=False, repr=False)
 	orchestrator: Orchestrator = field(init=False, repr=False)
 	_model_startup_warning: Optional[str] = field(init=False, default=None, repr=False)
+	_step_thread: Optional[threading.Thread] = field(init=False, default=None, repr=False)
+	_step_lock: threading.Lock = field(init=False, default_factory=threading.Lock, repr=False)
 
 	def __post_init__(self) -> None:
 		"""
@@ -48,6 +51,7 @@ class Simulation:
 
 		self.orchestrator = Orchestrator(self.database, self.llm_client)
 		self.load_from_db()
+		self.tick_count = self.database.get_latest_turn_number()
 
 	def _should_seed_default_world(self) -> bool:
 		return not self.database.get_all_rooms() or not self.database.get_all_characters()
@@ -251,20 +255,38 @@ class Simulation:
 		if not self.is_running or self.is_paused:
 			return
 
+		if self._step_thread is not None and self._step_thread.is_alive():
+			return
+
 		self._time_accumulator += dt
 
-		while self._time_accumulator >= self.tick_interval:
+		if self._time_accumulator < self.tick_interval:
+			return
+
+		self._time_accumulator = 0.0
+		self._step_thread = threading.Thread(target=self._run_step_locked, daemon=True)
+		self._step_thread.start()
+
+	def _run_step_locked(self) -> None:
+		with self._step_lock:
 			self.step()
-			self._time_accumulator -= self.tick_interval
-			if not self.is_running or self.is_paused:
-				break
 
 	def step(self) -> None:
 		"""
 		Purpose:
 			Advance the simulation by exactly one character turn.
 		"""
-		result = self.orchestrator.run_character_turn()
+		try:
+			result = self.orchestrator.run_character_turn()
+		except OllamaClientError as exc:
+			self.is_running = False
+			self.is_paused = True
+			self.pause_requested = False
+			self.event_log.append(f"Simulation paused because the Ollama response could not be parsed: {exc}")
+			self.event_log = self.event_log[-50:]
+			self._model_startup_warning = str(exc)
+			return
+
 		self.tick_count = result.turn_number
 		self.event_log.extend(result.public_log_entries)
 		self.event_log = self.event_log[-50:]

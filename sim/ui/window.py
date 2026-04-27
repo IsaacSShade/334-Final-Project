@@ -238,11 +238,32 @@ class Window:
 		title = font.render("Recent Events", True, TEXT)
 		screen.blit(title, (panel_rect.x + 12, panel_rect.y + 10))
 
-		log_lines = snapshot["event_log"][-12:] if snapshot["event_log"] else ["No events yet."]
-		y = panel_rect.y + 40
+		max_text_width = panel_rect.width - 24
+		log_lines = snapshot["event_log"] if snapshot["event_log"] else ["No events yet."]
+		wrapped: list[str] = []
 		for line in log_lines:
+			wrapped.extend(self._wrap_text(str(line), font, max_text_width))
+
+		y = panel_rect.y + 40
+		for line in wrapped[-30:]:
 			if y > panel_rect.bottom - 22:
 				break
-			surface = font.render(str(line), True, SUBTLE_TEXT)
+			surface = font.render(line, True, SUBTLE_TEXT)
 			screen.blit(surface, (panel_rect.x + 12, y))
 			y += 22
+
+	def _wrap_text(self, text: str, font: pygame.font.Font, max_width: int) -> list[str]:
+		words = text.split(" ")
+		lines: list[str] = []
+		current = ""
+		for word in words:
+			candidate = f"{current} {word}".strip()
+			if font.size(candidate)[0] <= max_width:
+				current = candidate
+			else:
+				if current:
+					lines.append(current)
+				current = word
+		if current:
+			lines.append(current)
+		return lines or [text]

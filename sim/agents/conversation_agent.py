@@ -63,11 +63,9 @@ class ConversationAgent:
 
 	def _build_system_prompt(self, exchange_number: int, max_exchanges: int) -> str:
 		if exchange_number >= max_exchanges:
-			closing_instruction = "You must wrap up this conversation now."
-		elif exchange_number >= 40:
-			closing_instruction = "Wrap up naturally and keep the reply concise."
-		elif exchange_number >= 30:
-			closing_instruction = "Start narrowing the topic toward a conclusion."
+			closing_instruction = "This is the final exchange — you MUST end the conversation now. Set should_end to true."
+		elif exchange_number >= max_exchanges - 2:
+			closing_instruction = "The conversation is winding down. Start wrapping up and set should_end to true if it feels natural to stop."
 		else:
 			closing_instruction = "Respond naturally and stay in character."
 

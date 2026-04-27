@@ -6,6 +6,13 @@ from dataclasses import dataclass
 from typing import Any, Optional
 from urllib import error, request
 
+_DEV = os.environ.get("SIM_DEV_MODE", "0").strip() == "1"
+
+
+def _dev(msg: str) -> None:
+    if _DEV:
+        print(f"[DEV][llm_client] {msg}")
+
 
 class OllamaClientError(RuntimeError):
 	"""
@@ -149,16 +156,88 @@ class OllamaClient:
 			"messages": [{"role": "system", "content": system_prompt}, *messages],
 			"options": {"temperature": 0},
 		}
+		_dev(f"POST /chat — model={self.model}")
+		_dev(f"  system_prompt: {system_prompt[:120]!r}")
+		for m in messages:
+			_dev(f"  [{m['role']}]: {str(m.get('content', ''))[:200]!r}")
 		response = self._request("POST", "/chat", data=payload, timeout=timeout)
 		content = response.get("message", {}).get("content")
+		_dev(f"  raw content: {str(content)[:300]!r}")
 
 		if not content:
 			raise OllamaClientError("Ollama response did not include message content.")
 
 		try:
-			return json.loads(content)
+			return self._parse_structured_content(str(content))
 		except json.JSONDecodeError as exc:
-			raise OllamaClientError("Ollama returned non-JSON structured output.") from exc
+			raise OllamaClientError(
+				f"Ollama returned non-JSON structured output. Raw content: {content!r}"
+			) from exc
+
+	def _parse_structured_content(self, content: str) -> dict[str, Any]:
+		"""
+		Purpose:
+			Parse structured model output while tolerating common wrappers such as
+			code fences or short lead-in text.
+
+		Inputs:
+			content: The raw model message content.
+
+		Outputs:
+			A parsed JSON dictionary.
+		"""
+		stripped = content.strip()
+		if not stripped:
+			raise json.JSONDecodeError("Empty content", content, 0)
+
+		candidates = [
+			stripped,
+			self._strip_markdown_fences(stripped),
+		]
+		extracted = self._extract_json_object(stripped)
+		if extracted is not None:
+			candidates.append(extracted)
+
+		last_error: json.JSONDecodeError | None = None
+		for candidate in candidates:
+			if not candidate:
+				continue
+			try:
+				parsed = json.loads(candidate)
+			except json.JSONDecodeError as exc:
+				last_error = exc
+				continue
+
+			if not isinstance(parsed, dict):
+				raise json.JSONDecodeError("Structured response was not a JSON object", candidate, 0)
+			return parsed
+
+		if last_error is not None:
+			raise last_error
+		raise json.JSONDecodeError("Unable to parse structured content", content, 0)
+
+	def _strip_markdown_fences(self, content: str) -> str:
+		if content.startswith("```") and content.endswith("```"):
+			lines = content.splitlines()
+			if len(lines) >= 3:
+				return "\n".join(lines[1:-1]).strip()
+		return content
+
+	def _extract_json_object(self, content: str) -> str | None:
+		start = None
+		depth = 0
+		for index, char in enumerate(content):
+			if char == "{":
+				if start is None:
+					start = index
+				depth += 1
+			elif char == "}":
+				if start is None:
+					continue
+				depth -= 1
+				if depth == 0:
+					return content[start:index + 1]
+		return None
 
 	def _request(
 		self,
