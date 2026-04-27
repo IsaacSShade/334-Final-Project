@@ -162,8 +162,11 @@ class Orchestrator:
 				break
 
 			context = self._build_context(character, dict(room_row))
-			_dev(f"  calling planner (used_actions={used_actions})")
-			plan = self.turn_planner.choose_next_action(context, available_rooms, used_actions)
+			connected = self.database.get_connected_rooms(str(room_id))
+			connected_ids = {str(r["id"]) for r in connected}
+			reachable = [r for r in available_rooms if str(r["id"]) in connected_ids]
+			_dev(f"  calling planner (used_actions={used_actions}, reachable={[r['id'] for r in reachable]})")
+			plan = self.turn_planner.choose_next_action(context, reachable, used_actions)
 			_dev(f"  planner returned: action={plan.next_action!r}")
 			if plan.next_action == "none":
 				_dev("  next_action=none — breaking")

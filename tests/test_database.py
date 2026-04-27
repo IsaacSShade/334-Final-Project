@@ -1,5 +1,6 @@
 import unittest
 import uuid
+import tempfile
 from pathlib import Path
 
 from sim.core.database import Database
@@ -140,6 +141,26 @@ class TestDatabase(unittest.TestCase):
 			database.close()
 			db_path.unlink(missing_ok=True)
 
+	def test_room_connections_are_bidirectional(self) -> None:
+		"""
+		Purpose:
+			Verify connect_rooms creates a two-way connection and get_connected_rooms returns them.
+		"""
+		with tempfile.TemporaryDirectory() as temp_dir:
+			db_path = Path(temp_dir) / "test_connections.db"
+			database = Database(str(db_path))
+			database.initialize()
+
+			database.create_room(size=20, description="Lobby", room_id="lobby")
+			database.create_room(size=15, description="Library", room_id="library")
+			database.connect_rooms("lobby", "library")
+
+			from_lobby = [r["id"] for r in database.get_connected_rooms("lobby")]
+			from_library = [r["id"] for r in database.get_connected_rooms("library")]
+			self.assertIn("library", from_lobby)
+			self.assertIn("lobby", from_library)
+
+			database.close()
 
 if __name__ == "__main__":
 	unittest.main()

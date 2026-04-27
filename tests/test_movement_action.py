@@ -17,6 +17,7 @@ class TestMovementAction(unittest.TestCase):
 
 		self.room_a = self.database.create_room(10, "Room A", room_id="room_a")
 		self.room_b = self.database.create_room(12, "Room B", room_id="room_b")
+		self.database.connect_rooms(self.room_a, self.room_b)
 		self.character_id = self.database.create_character(
 			name="Alice",
 			background="A traveler.",

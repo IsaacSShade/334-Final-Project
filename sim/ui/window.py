@@ -106,7 +106,7 @@ class Window:
 		now: float,
 	) -> None:
 		screen.fill(BACKGROUND)
-		layout = build_layout(self.width, self.height, snapshot["rooms"])
+		layout = build_layout(self.width, self.height, snapshot["rooms"], snapshot.get("connections", []))
 		token_rects = compute_all_token_rects(
 			layout["room_rects"],
 			snapshot["rooms"],
@@ -116,6 +116,7 @@ class Window:
 		draw_rects = self.scene_state.resolve_draw_rects(token_rects, now)
 
 		self._draw_header(screen, snapshot, layout["header_rect"], font, small_font)
+		self._draw_connections(screen, snapshot.get("connections", []), layout["room_rects"])
 		self._draw_rooms(screen, snapshot, layout["room_rects"], draw_rects, font, token_font)
 		self._draw_event_panel(screen, snapshot, layout["event_rect"], small_font)
 
@@ -186,6 +187,26 @@ class Window:
 			buttons[key] = rect
 
 		return buttons
+
+	def _draw_connections(
+		self,
+		screen: pygame.Surface,
+		connections: list[dict],
+		room_rects: dict[str, pygame.Rect],
+	) -> None:
+		CONNECTION_COLOR = (60, 70, 95)
+		CONNECTION_WIDTH = 3
+		for conn in connections:
+			rect_a = room_rects.get(conn["room_id_1"])
+			rect_b = room_rects.get(conn["room_id_2"])
+			if rect_a and rect_b:
+				pygame.draw.line(
+					screen,
+					CONNECTION_COLOR,
+					rect_a.center,
+					rect_b.center,
+					CONNECTION_WIDTH,
+				)
 
 	def _draw_rooms(
 		self,

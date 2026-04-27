@@ -152,16 +152,22 @@ class Simulation:
 		self.clear()
 		self.load_from_db()
 
-	def add_room(self, room_data: dict) -> None:
+	def add_room(self, room_data: dict | str) -> None:
 		"""
 		Purpose:
-			Add a room to the in-memory world snapshot if it does not already
-			exist.
+			Add a room to the in-memory world snapshot if it does not already exist.
+			Accepts either a room dict or a string room ID (looked up from DB).
 		"""
-		if room_data:
-			room_id = room_data.get("id")
-			if not any(r.get("id") == room_id for r in self.rooms):
-				self.rooms.append(room_data)
+		if not room_data:
+			return
+
+		if isinstance(room_data, str):
+			room_row = self.database.get_room(room_data)
+			room_data = dict(room_row) if room_row else {"id": room_data, "size": 10, "description": "A room."}
+
+		room_id = room_data.get("id")
+		if not any(r.get("id") == room_id for r in self.rooms):
+			self.rooms.append(room_data)
 
 	def add_character(self, character: dict) -> None:
 		"""
@@ -233,10 +239,16 @@ class Simulation:
 		status = "running" if self.is_running and not self.is_paused else "paused" if self.is_paused else "idle"
 		can_start = warning is None and bool(self.rooms) and bool(self.characters)
 
+		connections = [
+			{"room_id_1": str(r["room_id_1"]), "room_id_2": str(r["room_id_2"])}
+			for r in self.database.get_all_connections()
+		]
+
 		return {
 			"turn_number": self.tick_count,
 			"rooms": list(self.rooms),
 			"characters": list(self.characters),
+			"connections": connections,
 			"event_log": list(self.event_log),
 			"is_running": self.is_running,
 			"is_paused": self.is_paused,

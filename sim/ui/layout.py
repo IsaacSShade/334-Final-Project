@@ -17,10 +17,11 @@ def build_layout(
 	window_width: int,
 	window_height: int,
 	rooms: list[dict],
+	connections: list[dict] | None = None,
 ) -> dict[str, object]:
 	"""
 	Purpose:
-		Compute the main HUD, room-grid, and event-panel rectangles for the
+		Compute the main HUD, room-graph, and event-panel rectangles for the
 		current window size.
 	"""
 	header_rect = pygame.Rect(0, 0, window_width, HEADER_HEIGHT)
@@ -36,7 +37,7 @@ def build_layout(
 		EVENT_PANEL_WIDTH - GRID_PADDING,
 		grid_rect.height,
 	)
-	room_rects = compute_room_grid(grid_rect, rooms)
+	room_rects = compute_room_layout(grid_rect, rooms, connections or [])
 
 	return {
 		"header_rect": header_rect,
@@ -46,37 +47,42 @@ def build_layout(
 	}
 
 
-def compute_room_grid(
+def compute_room_layout(
 	container_rect: pygame.Rect,
 	rooms: list[dict],
+	connections: list[dict],
 ) -> dict[str, pygame.Rect]:
 	"""
 	Purpose:
-		Compute a square-ish grid of room rectangles.
+		Position rooms in a circular layout so connection lines between them
+		are visible and no room is strictly grid-locked.
 	"""
 	if not rooms:
 		return {}
 
 	room_count = len(rooms)
-	columns = max(1, math.ceil(math.sqrt(room_count)))
-	rows = max(1, math.ceil(room_count / columns))
-	gap = GRID_PADDING
-	cell_width = max(
-		120,
-		(container_rect.width - gap * (columns + 1)) // columns,
-	)
-	cell_height = max(
-		96,
-		(container_rect.height - gap * (rows + 1)) // rows,
-	)
+	room_w = max(140, min(220, (container_rect.width - GRID_PADDING * 2) // max(1, room_count) - GRID_PADDING))
+	room_h = max(96, min(160, (container_rect.height - GRID_PADDING * 2) // 2))
+
+	cx = container_rect.x + container_rect.width // 2
+	cy = container_rect.y + container_rect.height // 2
+
+	if room_count == 1:
+		rx = cx - room_w // 2
+		ry = cy - room_h // 2
+		return {str(rooms[0]["id"]): pygame.Rect(rx, ry, room_w, room_h)}
+
+	radius_x = max(room_w, (container_rect.width - room_w * 2) // 2)
+	radius_y = max(room_h, (container_rect.height - room_h * 2) // 2)
 
 	room_rects: dict[str, pygame.Rect] = {}
 	for index, room in enumerate(rooms):
-		column = index % columns
-		row = index // columns
-		x = container_rect.x + gap + column * (cell_width + gap)
-		y = container_rect.y + gap + row * (cell_height + gap)
-		room_rects[str(room["id"])] = pygame.Rect(x, y, cell_width, cell_height)
+		angle = (2 * math.pi * index / room_count) - (math.pi / 2)
+		rx = int(cx + radius_x * math.cos(angle)) - room_w // 2
+		ry = int(cy + radius_y * math.sin(angle)) - room_h // 2
+		rx = max(container_rect.x, min(container_rect.right - room_w, rx))
+		ry = max(container_rect.y, min(container_rect.bottom - room_h, ry))
+		room_rects[str(room["id"])] = pygame.Rect(rx, ry, room_w, room_h)
 
 	return room_rects
 

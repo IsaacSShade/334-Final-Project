@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(.venv/Scripts/python.exe -m unittest discover -s tests -v)",
+      "Bash(.venv/Scripts/python.exe -m unittest test_movement_action.TestMovementAction.test_move_success_updates_room_and_events test_orchestrator.TestOrchestrator.test_actor_can_talk_then_move_then_update_same_turn test_orchestrator.TestOrchestrator.test_destination_room_backlog_is_delivered_before_replanning test_simulation.TestSimulation.test_auto_seed_populates_default_world test_simulation.TestSimulation.test_pause_takes_effect_after_one_character_step)",
+      "Bash(.venv/Scripts/python.exe -m unittest discover -s tests)",
+      "Bash(.venv/Scripts/python.exe -m unittest tests.test_movement_action tests.test_simulation tests.test_orchestrator -v)",
+      "Bash(.venv/Scripts/python.exe -m unittest tests.test_movement_action.TestMovementAction.test_move_success_updates_room_and_events tests.test_simulation.TestSimulation.test_auto_seed_populates_default_world tests.test_simulation.TestSimulation.test_pause_takes_effect_after_one_character_step -v)",
+      "Bash(.venv/Scripts/python.exe -m unittest tests.test_movement_action tests.test_simulation tests.test_orchestrator tests.test_database -v)"
+    ]
+  }
+}

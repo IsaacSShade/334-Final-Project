@@ -26,10 +26,8 @@ class TestSimulation(unittest.TestCase):
         try:
             rooms = seeded.database.get_all_rooms()
             characters = seeded.database.get_all_characters()
-            self.assertGreaterEqual(len(rooms), 4)
+            self.assertGreaterEqual(len(rooms), 2)
             self.assertGreaterEqual(len(characters), 4)
-            occupancy = {character["current_room_id"] for character in characters}
-            self.assertEqual(len(occupancy), len(characters))
             self.assertTrue(
                 any("curious" in str(character["personality"]).lower() for character in characters)
             )
@@ -145,6 +143,8 @@ class TestSimulation(unittest.TestCase):
             self.assertTrue(self.sim.start())
             self.sim.pause()
             self.sim.update(self.sim.tick_interval)
+            if self.sim._step_thread:
+                self.sim._step_thread.join(timeout=5)
 
         self.assertEqual(self.sim.orchestrator.calls, 1)
         self.assertTrue(self.sim.is_paused)

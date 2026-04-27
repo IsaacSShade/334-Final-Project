@@ -33,6 +33,7 @@ class TestOrchestrator(unittest.TestCase):
 		self.database.initialize()
 		self.database.create_room(10, "A calm commons.", room_id="commons")
 		self.database.create_room(12, "A quiet studio.", room_id="studio")
+		self.database.connect_rooms("commons", "studio")
 
 	def tearDown(self) -> None:
 		self.database.close()

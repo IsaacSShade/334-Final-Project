@@ -62,6 +62,15 @@ class MovementAction:
 				warnings=[f"Room '{target_room_id}' was not found."],
 			)
 
+		connected_ids = {str(r["id"]) for r in self.database.get_connected_rooms(str(current_room_id))}
+		if target_room_id not in connected_ids:
+			return ActionResult(
+				action_type="move",
+				success=False,
+				summary=f"{character.get('name', 'The character')} could not move to {target_room_id} — no connection from {current_room_id}.",
+				warnings=[f"No connection between '{current_room_id}' and '{target_room_id}'."],
+			)
+
 		self.database.move_character(character_id, target_room_id)
 
 		source_label = current_room.get("name") or current_room_id
