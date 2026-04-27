@@ -222,6 +222,27 @@ class Database:
 		)
 		self.connection.commit()
 
+	def delete_room(self, room_id: str) -> None:
+		"""
+		Purpose:
+			Remove a room from the database. Characters that referenced the room
+			have their current_room_id cleared by the existing foreign key rule.
+
+		Inputs:
+			room_id: The room to delete.
+
+		Outputs:
+			None.
+		"""
+		self.connection.execute(
+			"""
+			DELETE FROM rooms
+			WHERE id = ?
+			""",
+			(room_id,),
+		)
+		self.connection.commit()
+
 	def update_room_description(self, room_id: str, description: str) -> None:
 		"""
 		Purpose:
