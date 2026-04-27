@@ -107,8 +107,8 @@ class TestOrchestrator(unittest.TestCase):
 
 		self.assertEqual(result.turn_number, 1)
 		self.assertEqual(len(result.public_log_entries), 3)
-		self.assertIn("talked in commons", result.public_log_entries[0])
-		self.assertIn("moved to studio", result.public_log_entries[1])
+		self.assertIn("conversation in commons", result.public_log_entries[0])
+		self.assertIn("walked from commons to studio", result.public_log_entries[1])
 		self.assertIn("straightened the studio", result.public_log_entries[2])
 		self.assertEqual(self.database.get_character("ava")["current_room_id"], "studio")
 		self.assertIn("tidy studio", self.database.get_room("studio")["description"])

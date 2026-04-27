@@ -171,6 +171,8 @@ class ConversationAction:
 			character_id=initiator_id,
 			room_id=room_id,
 			log=summary,
+			event_type="conversation",
+			event_meta={"conversation_id": conversation_id},
 		)
 		self.database.create_memory(
 			character_id=initiator_id,
@@ -210,11 +212,9 @@ class ConversationAction:
 				"but the conversation never started."
 			)
 
-		last_message = transcript[-1].message
 		return (
-			f"{initiator.get('name', 'A character')} and "
-			f"{recipient.get('name', 'another character')} talked in {room_id} "
-			f"and ended with {ended_by}. Final note: {last_message}"
+			f"{initiator.get('name')} and {recipient.get('name')} had a conversation "
+			f"in {room_id} ({len(transcript)} exchanges)."
 		)
 
 	def _build_memory_text(

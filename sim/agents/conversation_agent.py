@@ -103,6 +103,10 @@ class ConversationAgent:
 		else:
 			lines.append("- No dialogue yet. Open the conversation naturally.")
 
+		if request.context.character_memories:
+			lines.append("Your memories (most recent first):")
+			lines.extend(f"- {mem}" for mem in request.context.character_memories)
+
 		if request.context.room_event_backlog:
 			lines.append("Recent room events:")
 			lines.extend(f"- {event}" for event in request.context.room_event_backlog)

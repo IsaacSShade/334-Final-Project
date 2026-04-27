@@ -16,6 +16,7 @@ class ActionContext:
 	current_room: dict[str, Any]
 	characters_in_current_room: list[dict[str, Any]] = field(default_factory=list)
 	room_event_backlog: list[str] = field(default_factory=list)
+	character_memories: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)

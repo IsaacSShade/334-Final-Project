@@ -18,6 +18,7 @@ def build_layout(
 	window_height: int,
 	rooms: list[dict],
 	connections: list[dict] | None = None,
+	y_start: int = HEADER_HEIGHT,
 ) -> dict[str, object]:
 	"""
 	Purpose:
@@ -27,13 +28,13 @@ def build_layout(
 	header_rect = pygame.Rect(0, 0, window_width, HEADER_HEIGHT)
 	grid_rect = pygame.Rect(
 		GRID_PADDING,
-		HEADER_HEIGHT + GRID_PADDING,
+		y_start + GRID_PADDING,
 		max(120, window_width - EVENT_PANEL_WIDTH - (GRID_PADDING * 3)),
-		max(120, window_height - HEADER_HEIGHT - (GRID_PADDING * 2)),
+		max(120, window_height - y_start - (GRID_PADDING * 2)),
 	)
 	event_rect = pygame.Rect(
 		grid_rect.right + GRID_PADDING,
-		HEADER_HEIGHT + GRID_PADDING,
+		y_start + GRID_PADDING,
 		EVENT_PANEL_WIDTH - GRID_PADDING,
 		grid_rect.height,
 	)

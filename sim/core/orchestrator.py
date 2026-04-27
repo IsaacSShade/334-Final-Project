@@ -218,6 +218,10 @@ class Orchestrator:
 	) -> ActionContext:
 		room_id = str(room["id"])
 		backlog = self.room_backlog.get_room_backlog(room_id)
+		memory_rows = self.database.get_character_memories(
+			str(character["id"]), limit=10
+		)
+		memories = [str(row["text"]) for row in memory_rows if row["text"]]
 		return ActionContext(
 			turn_number=self.current_turn_number,
 			character=character,
@@ -226,6 +230,7 @@ class Orchestrator:
 				dict(row) for row in self.database.get_characters_in_room(room_id)
 			],
 			room_event_backlog=backlog,
+			character_memories=memories,
 		)
 
 	def _execute_plan(

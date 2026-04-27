@@ -161,6 +161,10 @@ class TurnPlannerAgent:
 				f"(occupants here now: {occupant_count})"
 			)
 
+		if context.character_memories:
+			lines.append("Your memories (most recent first):")
+			lines.extend(f"- {mem}" for mem in context.character_memories)
+
 		if context.room_event_backlog:
 			lines.append("Recent room events since your last turn:")
 			lines.extend(f"- {entry}" for entry in context.room_event_backlog)

@@ -8,7 +8,7 @@ OLLAMA_MODE ?= local
 OLLAMA_BASE_URL ?= http://localhost:11434
 OLLAMA_MODEL ?= gpt-oss:20b-cloud
 # Set DEV_MODE=1 to enable verbose debug logs (SIM_DEV_MODE env var).
-DEV_MODE ?= 1
+DEV_MODE ?= 0
 
 .PHONY: setup test run ollama-check ollama-signin ollama-pull ollama-run-cloud
 

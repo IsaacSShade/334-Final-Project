@@ -8,6 +8,7 @@ from sim.ui.layout import (
 	compute_all_token_rects,
 	get_character_color,
 )
+from sim.ui.logs_view import LogsView
 from sim.ui.scene_state import SceneState
 
 
@@ -21,6 +22,8 @@ BUTTON = (57, 84, 128)
 BUTTON_ACTIVE = (74, 112, 170)
 BUTTON_DANGER = (134, 62, 62)
 BUTTON_WARNING = (124, 98, 48)
+
+TAB_BAR_HEIGHT = 36
 
 
 class Window:
@@ -36,6 +39,8 @@ class Window:
 		self.title = "DevOps Town"
 		self.scene_state = SceneState(animation_duration=0.3)
 		self._buttons: dict[str, pygame.Rect] = {}
+		self._active_tab: str = "world"
+		self._logs_view = LogsView()
 
 	def run(self) -> None:
 		"""
@@ -69,6 +74,10 @@ class Window:
 				elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
 					self._handle_click(event.pos, snapshot)
 
+				if self._active_tab == "logs":
+					content_rect = self._get_content_rect()
+					self._logs_view.handle_event(event, content_rect)
+
 			self.simulation.update(dt)
 			snapshot = self.simulation.get_scene_state()
 			self._draw(screen, snapshot, font, small_font, token_font, now)
@@ -78,13 +87,26 @@ class Window:
 		pygame.quit()
 		sys.exit()
 
+	def _get_content_rect(self) -> pygame.Rect:
+		return pygame.Rect(
+			0,
+			HEADER_HEIGHT + TAB_BAR_HEIGHT,
+			self.width,
+			self.height - HEADER_HEIGHT - TAB_BAR_HEIGHT,
+		)
+
 	def _handle_click(self, position: tuple[int, int], snapshot: dict) -> None:
+		for key in ("world", "logs"):
+			if self._buttons.get(f"tab_{key}", pygame.Rect(0, 0, 0, 0)).collidepoint(position):
+				self._active_tab = key
+				return
+
 		if self._buttons.get("start", pygame.Rect(0, 0, 0, 0)).collidepoint(position):
 			if snapshot.get("can_start"):
 				self.simulation.start()
 			return
 
-		if self._buttons.get("pause", pygame.Rect(0, 0, 0, 0)).collidepoint(position):
+		if self._buttons.get("stop", pygame.Rect(0, 0, 0, 0)).collidepoint(position):
 			if snapshot.get("is_running") and not snapshot.get("is_paused"):
 				self.simulation.pause()
 			return
@@ -106,19 +128,34 @@ class Window:
 		now: float,
 	) -> None:
 		screen.fill(BACKGROUND)
-		layout = build_layout(self.width, self.height, snapshot["rooms"], snapshot.get("connections", []))
-		token_rects = compute_all_token_rects(
-			layout["room_rects"],
+		layout = build_layout(
+			self.width,
+			self.height,
 			snapshot["rooms"],
-			snapshot["characters"],
+			snapshot.get("connections", []),
+			y_start=HEADER_HEIGHT + TAB_BAR_HEIGHT,
 		)
-		self.scene_state.sync(snapshot["characters"], token_rects, now)
-		draw_rects = self.scene_state.resolve_draw_rects(token_rects, now)
 
 		self._draw_header(screen, snapshot, layout["header_rect"], font, small_font)
-		self._draw_connections(screen, snapshot.get("connections", []), layout["room_rects"])
-		self._draw_rooms(screen, snapshot, layout["room_rects"], draw_rects, font, token_font)
-		self._draw_event_panel(screen, snapshot, layout["event_rect"], small_font)
+		self._draw_tab_bar(screen, font)
+
+		if self._active_tab == "world":
+			token_rects = compute_all_token_rects(
+				layout["room_rects"],
+				snapshot["rooms"],
+				snapshot["characters"],
+			)
+			self.scene_state.sync(snapshot["characters"], token_rects, now)
+			draw_rects = self.scene_state.resolve_draw_rects(token_rects, now)
+
+			self._draw_connections(screen, snapshot.get("connections", []), layout["room_rects"])
+			self._draw_rooms(screen, snapshot, layout["room_rects"], draw_rects, font, token_font)
+			self._draw_event_panel(screen, snapshot, layout["event_rect"], small_font)
+
+		elif self._active_tab == "logs":
+			content_rect = self._get_content_rect()
+			detailed_logs = self.simulation.get_detailed_logs()
+			self._logs_view.render(screen, content_rect, detailed_logs, font, small_font)
 
 	def _draw_header(
 		self,
@@ -162,8 +199,8 @@ class Window:
 		button_specs = [
 			("start", "Start", BUTTON_ACTIVE, bool(snapshot.get("can_start"))),
 			(
-				"pause",
-				"Pause",
+				"stop",
+				"Stop",
 				BUTTON_WARNING,
 				bool(snapshot.get("is_running")) and not bool(snapshot.get("is_paused")),
 			),
@@ -187,6 +224,25 @@ class Window:
 			buttons[key] = rect
 
 		return buttons
+
+	def _draw_tab_bar(self, screen: pygame.Surface, font: pygame.font.Font) -> None:
+		bar_rect = pygame.Rect(0, HEADER_HEIGHT, self.width, TAB_BAR_HEIGHT)
+		pygame.draw.rect(screen, PANEL, bar_rect)
+		pygame.draw.line(screen, PANEL_BORDER, bar_rect.bottomleft, bar_rect.bottomright, 1)
+		tabs = [("world", "World"), ("logs", "Logs")]
+		tab_w = 100
+		x = 16
+		for key, label in tabs:
+			active = self._active_tab == key
+			color = BUTTON_ACTIVE if active else PANEL
+			tab_rect = pygame.Rect(x, HEADER_HEIGHT + 4, tab_w, TAB_BAR_HEIGHT - 8)
+			pygame.draw.rect(screen, color, tab_rect, border_radius=6)
+			if active:
+				pygame.draw.rect(screen, PANEL_BORDER, tab_rect, width=1, border_radius=6)
+			surf = font.render(label, True, TEXT)
+			screen.blit(surf, surf.get_rect(center=tab_rect.center))
+			self._buttons[f"tab_{key}"] = tab_rect
+			x += tab_w + 8
 
 	def _draw_connections(
 		self,

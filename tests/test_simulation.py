@@ -199,5 +199,28 @@ class TestSimulation(unittest.TestCase):
         self.assertTrue(self.sim.is_paused)
         self.assertIn("could not be parsed", self.sim.event_log[-1])
 
+    def test_get_detailed_logs_does_not_raise_on_sqlite_rows(self):
+        self.sim.database.create_room(10, "A calm commons.", room_id="commons")
+        self.sim.database.create_character(
+            name="Alice",
+            background="Observant.",
+            personality="Calm.",
+            current_room_id="commons",
+            character_id="alice",
+        )
+        self.sim.database.create_event(1, "alice", "Alice looked around.", room_id="commons")
+
+        # This must not raise AttributeError: 'sqlite3.Row' has no attribute 'get'
+        result = self.sim.get_detailed_logs()
+
+        self.assertIn("entries", result)
+        self.assertIn("rooms", result)
+        rooms = result["rooms"]
+        self.assertEqual(len(rooms), 1)
+        self.assertEqual(rooms[0]["id"], "commons")
+        self.assertEqual(rooms[0]["description"], "A calm commons.")
+        self.assertIn("Alice", rooms[0]["occupants"])
+
+
 if __name__ == "__main__":
     unittest.main()

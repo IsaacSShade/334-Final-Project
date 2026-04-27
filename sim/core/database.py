@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 import sqlite3
 import uuid
@@ -177,6 +178,12 @@ class Database:
 				ADD COLUMN last_completed_turn INTEGER NOT NULL DEFAULT 0
 				"""
 			)
+
+		event_cols = {row["name"] for row in self.connection.execute("PRAGMA table_info(events)")}
+		if "event_type" not in event_cols:
+			self.connection.execute("ALTER TABLE events ADD COLUMN event_type TEXT")
+		if "event_meta" not in event_cols:
+			self.connection.execute("ALTER TABLE events ADD COLUMN event_meta TEXT")
 
 	def close(self) -> None:
 		"""
@@ -623,6 +630,8 @@ class Database:
 		character_id: str,
 		log: str,
 		room_id: Optional[str] = None,
+		event_type: Optional[str] = None,
+		event_meta: Optional[dict] = None,
 	) -> int:
 		"""
 		Purpose:
@@ -633,16 +642,19 @@ class Database:
 			character_id: The acting character.
 			log: Short natural-language event summary.
 			room_id: Optional room tied to the event.
+			event_type: Optional event category (e.g. 'move', 'conversation', 'room_update').
+			event_meta: Optional metadata dict serialized as JSON.
 
 		Outputs:
 			The integer event identifier that was inserted.
 		"""
+		meta_value = json.dumps(event_meta) if event_meta is not None else None
 		cursor = self.connection.execute(
 			"""
-			INSERT INTO events (turn_number, character_id, room_id, log)
-			VALUES (?, ?, ?, ?)
+			INSERT INTO events (turn_number, character_id, room_id, log, event_type, event_meta)
+			VALUES (?, ?, ?, ?, ?, ?)
 			""",
-			(turn_number, character_id, room_id, log),
+			(turn_number, character_id, room_id, log, event_type, meta_value),
 		)
 		event_id = cursor.lastrowid
 
@@ -652,6 +664,72 @@ class Database:
 
 		self.connection.commit()
 		return event_id
+
+	def get_recent_events_rich(self, limit: int = 50) -> list[dict]:
+		"""
+		Purpose:
+			Fetch recent events with character names and expanded metadata.
+
+		Inputs:
+			limit: Maximum number of events to return.
+
+		Outputs:
+			A list of plain dicts with event details, including transcripts for
+			conversation events and before/after descriptions for room updates.
+		"""
+		import json as _json
+		cursor = self.connection.execute(
+			"""
+			SELECT e.id, e.turn_number, e.room_id, e.log, e.event_type, e.event_meta,
+				   c.name AS character_name
+			FROM events e
+			LEFT JOIN characters c ON c.id = e.character_id
+			ORDER BY e.turn_number DESC, e.id DESC
+			LIMIT ?
+			""",
+			(limit,),
+		)
+		rows = cursor.fetchall()
+		result = []
+		for row in rows:
+			entry = {
+				"id": row["id"],
+				"turn": row["turn_number"],
+				"room_id": row["room_id"] or "",
+				"summary": row["log"],
+				"type": row["event_type"] or "generic",
+				"character_name": row["character_name"] or "Unknown",
+			}
+			meta = {}
+			if row["event_meta"]:
+				try:
+					meta = _json.loads(row["event_meta"])
+				except Exception:
+					pass
+			if entry["type"] == "conversation":
+				entry["conversation_id"] = meta.get("conversation_id", "")
+				transcript = []
+				if entry["conversation_id"]:
+					msgs = self.connection.execute(
+						"""
+						SELECT cm.message, c.name AS speaker_name
+						FROM conversation_messages cm
+						LEFT JOIN characters c ON c.id = cm.speaker_id
+						WHERE cm.conversation_id = ?
+						ORDER BY cm.exchange_number
+						""",
+						(entry["conversation_id"],),
+					).fetchall()
+					transcript = [{"speaker": m["speaker_name"] or "?", "message": m["message"]} for m in msgs]
+				entry["transcript"] = transcript
+			elif entry["type"] == "room_update":
+				entry["before_description"] = meta.get("before", "")
+				entry["after_description"] = meta.get("after", "")
+			elif entry["type"] == "move":
+				entry["from_room"] = meta.get("from_room", "")
+				entry["to_room"] = meta.get("to_room", "")
+			result.append(entry)
+		return result
 
 	def create_memory(
 		self,

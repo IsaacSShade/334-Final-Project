@@ -73,25 +73,28 @@ class MovementAction:
 
 		self.database.move_character(character_id, target_room_id)
 
+		name = character.get("name", "The character")
 		source_label = current_room.get("name") or current_room_id
 		target_label = target_room["id"]
 		leave_event = self.database.create_event(
 			turn_number=request.context.turn_number,
 			character_id=character_id,
 			room_id=current_room_id,
-			log=f"{character.get('name', 'The character')} left {source_label} for {target_label}.",
+			log=f"{name} left {source_label}.",
 		)
 		enter_event = self.database.create_event(
 			turn_number=request.context.turn_number,
 			character_id=character_id,
 			room_id=target_room_id,
-			log=f"{character.get('name', 'The character')} entered {target_label} from {source_label}.",
+			log=f"{name} walked from {source_label} to {target_label}.",
+			event_type="move",
+			event_meta={"from_room": current_room_id, "to_room": target_room_id},
 		)
 
 		return ActionResult(
 			action_type="move",
 			success=True,
-			summary=f"{character.get('name', 'The character')} moved to {target_label}.",
+			summary=f"{name} walked from {source_label} to {target_label}.",
 			events_created=[leave_event, enter_event],
 			state_changes={"current_room_id": target_room_id},
 		)

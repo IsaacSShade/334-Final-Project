@@ -52,6 +52,8 @@ class Simulation:
 		self.orchestrator = Orchestrator(self.database, self.llm_client)
 		self.load_from_db()
 		self.tick_count = self.database.get_latest_turn_number()
+		recent = self.database.get_recent_events(limit=50)
+		self.event_log = [str(r["log"]) for r in reversed(recent) if r["log"]]
 
 	def _should_seed_default_world(self) -> bool:
 		return not self.database.get_all_rooms() or not self.database.get_all_characters()
@@ -307,6 +309,32 @@ class Simulation:
 		if self.pause_requested:
 			self.is_paused = True
 			self.pause_requested = False
+
+	def get_detailed_logs(self, limit: int = 50) -> dict:
+		"""
+		Purpose:
+			Return a renderer-friendly payload with rich event entries and room snapshots.
+
+		Inputs:
+			limit: Maximum number of events to return.
+
+		Outputs:
+			A dict with 'entries' (list of rich event dicts) and 'rooms' (list of room snapshots).
+		"""
+		return {
+			"entries": self.database.get_recent_events_rich(limit),
+			"rooms": [
+				{
+					"id": str(r["id"]),
+					"description": str(r["description"] or ""),
+					"occupants": [
+						str(c["name"] or "?")
+						for c in self.database.get_characters_in_room(str(r["id"]))
+					],
+				}
+				for r in self.database.get_all_rooms()
+			],
+		}
 
 	def shutdown(self) -> None:
 		"""
