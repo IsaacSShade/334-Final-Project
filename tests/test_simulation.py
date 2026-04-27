@@ -103,7 +103,7 @@ class TestSimulation(unittest.TestCase):
         self.assertEqual(self.sim.tick_count, 0)
         self.assertEqual(self.sim.event_log, [])
 
-    def test_reset_world_clears_rooms_and_characters(self):
+    def test_reset_world_reseeds_default_world(self):
         self.sim.database.create_room(10, "A shared room.", room_id="room_a")
         self.sim.database.create_character(
             name="Alice",
@@ -115,9 +115,12 @@ class TestSimulation(unittest.TestCase):
 
         self.sim.reset_world()
 
-        self.assertEqual(self.sim.database.get_all_rooms(), [])
-        self.assertEqual(self.sim.database.get_all_characters(), [])
-        self.assertEqual(self.sim.get_scene_state()["world_empty"], True)
+        rooms = self.sim.database.get_all_rooms()
+        characters = self.sim.database.get_all_characters()
+        self.assertGreaterEqual(len(rooms), 2)
+        self.assertGreaterEqual(len(characters), 4)
+        self.assertFalse(self.sim.get_scene_state()["world_empty"])
+        self.assertFalse(any(r["id"] == "room_a" for r in rooms), "custom room should be gone")
 
     def test_pause_takes_effect_after_one_character_step(self):
         self.sim.database.create_room(10, "A shared room.", room_id="room_a")
