@@ -2,7 +2,7 @@ import unittest
 
 import pygame
 
-from sim.ui.layout import compute_all_token_rects, compute_room_grid, get_character_color
+from sim.ui.layout import compute_all_token_rects, compute_room_layout, get_character_color
 from sim.ui.scene_state import SceneState
 
 
@@ -21,7 +21,7 @@ class TestUILayout(unittest.TestCase):
 			{"id": "casey", "name": "Casey", "current_room_id": "studio"},
 		]
 
-		room_rects = compute_room_grid(container, rooms)
+		room_rects = compute_room_layout(container, rooms, connections=[])
 		token_rects = compute_all_token_rects(room_rects, rooms, characters)
 
 		self.assertEqual(set(room_rects), {"commons", "kitchen", "studio", "garden"})
